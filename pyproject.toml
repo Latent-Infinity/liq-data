@@ -1,0 +1,126 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "liq-data"
+version = "0.1.0"
+description = "Data providers and ingestion for the LIQ Stack"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Travis Risner", email = "firestrand@gmail.com" },
+]
+keywords = [
+    "finance",
+    "trading",
+    "data",
+    "providers",
+    "ingestion",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+    "Typing :: Typed",
+]
+dependencies = [
+    "liq-core>=0.1.0",
+    "liq-store>=0.1.0",
+    "polars>=1.20",
+    "httpx>=0.28",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0",
+    "tenacity>=9.0",
+    "typer>=0.15",
+    "rich>=13.9",
+]
+
+[project.scripts]
+liq-data = "liq.data.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.25",
+    "respx>=0.22",
+    "hypothesis>=6.120",
+    "ruff>=0.14",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/firestrand/liq-data"
+Repository = "https://github.com/firestrand/liq-data"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/liq"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q --cov=liq.data --cov-report=term-missing --cov-fail-under=90"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/liq/data"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+    "pass",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["polars.*", "httpx.*", "tenacity.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+    "ARG",
+    "SIM",
+]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG001", "ARG002"]  # Allow unused args in test mocks
+"**/cli.py" = ["B904"]  # typer.Exit() is intentionally not chained
+"**/cli/*.py" = ["B904"]  # typer.Exit() is intentionally not chained
+
+[tool.ruff.lint.isort]
+known-first-party = ["liq"]

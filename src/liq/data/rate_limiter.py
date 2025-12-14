@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 
 class RateLimiter:
     """Token-bucket-like limiter using sliding window."""
 
-    def __init__(self, requests_per_minute: Optional[int] = None, burst: Optional[int] = None) -> None:
+    def __init__(self, requests_per_minute: int | None = None, burst: int | None = None) -> None:
         self.requests_per_minute = requests_per_minute
         self.burst = burst or requests_per_minute
         self._events: deque[datetime] = deque()
@@ -20,14 +19,14 @@ class RateLimiter:
         """Block until within rate limits."""
         if not self.requests_per_minute:
             return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         window = timedelta(minutes=1)
         self._evict(now, window)
         if self.burst and len(self._events) >= self.burst:
             sleep_for = (self._events[0] + window - now).total_seconds()
             if sleep_for > 0:
                 time.sleep(sleep_for)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             self._evict(now, window)
         self._events.append(now)
 

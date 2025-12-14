@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import polars as pl
 
+from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE
 from liq.data.qa import run_bar_qa
 
 
@@ -31,11 +32,11 @@ def test_qa_empty_df_safe() -> None:
     df = pl.DataFrame(
         schema={
             "timestamp": pl.Datetime("us", "UTC"),
-            "open": pl.Float64,
-            "high": pl.Float64,
-            "low": pl.Float64,
-            "close": pl.Float64,
-            "volume": pl.Float64,
+            "open": PRICE_DTYPE,
+            "high": PRICE_DTYPE,
+            "low": PRICE_DTYPE,
+            "close": PRICE_DTYPE,
+            "volume": VOLUME_DTYPE,
         }
     )
     qa = run_bar_qa(df)

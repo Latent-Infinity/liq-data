@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Literal
 
 import polars as pl
@@ -10,7 +9,7 @@ import polars as pl
 AggregationMethod = Literal["default"]
 
 
-def aggregate_bars(df: pl.DataFrame, timeframe: str, method: AggregationMethod = "default") -> pl.DataFrame:
+def aggregate_bars(df: pl.DataFrame, timeframe: str, _method: AggregationMethod = "default") -> pl.DataFrame:
     """Aggregate 1m bars to a higher timeframe using provider-mimicking rules.
 
     Default rule: open=first, high=max, low=min, close=last, volume=sum.

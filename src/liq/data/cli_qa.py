@@ -1,30 +1,57 @@
-"""Minimal Typer CLI for QA checks on bar data."""
+"""Minimal Typer CLI for QA checks on bar data.
+
+All data access goes through liq-store for consistent storage abstraction.
+"""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+from typing import Annotated
 
 import polars as pl
 import typer
 from rich.console import Console
 
 from liq.data.qa import run_bar_qa
+from liq.data.settings import get_store, get_storage_key
 
 app = typer.Typer(help="liq-data QA utilities")
 console = Console()
 
 
+def _load_data(source: str) -> pl.DataFrame:
+    """Load data from storage via liq-store.
+
+    Args:
+        source: Storage key (provider/symbol/bars/timeframe), e.g. oanda/EUR_USD/bars/1m
+
+    Returns:
+        DataFrame with bar data
+    """
+    parts = source.split("/")
+    if len(parts) == 4 and parts[2] == "bars":
+        provider, symbol, _, timeframe = parts
+    elif len(parts) == 3:
+        provider, symbol, timeframe = parts
+    else:
+        raise ValueError(
+            "source must be a storage key of the form provider/symbol/bars/timeframe"
+        )
+    store = get_store()
+    storage_key = get_storage_key(provider, symbol, timeframe)
+
+    if not store.exists(storage_key):
+        raise FileNotFoundError(f"Data not found: {storage_key}. Use liq-store-managed data.")
+
+    return store.read(storage_key)
+
+
 @app.command("qa")
 def qa(
-    bars_path: Path = typer.Argument(..., help="Path to bars in JSON or Parquet"),
+    source: Annotated[str, typer.Argument(help="Storage key: provider/symbol/bars/timeframe (e.g., oanda/EUR_USD/bars/1m)")],
 ) -> None:
-    """Run bar-level QA checks and print summary."""
-    if bars_path.suffix.lower() == ".parquet":
-        df = pl.read_parquet(bars_path)
-    else:
-        with bars_path.open() as f:
-            df = pl.from_dicts(json.load(f))
+    """Run bar-level QA checks and print summary via liq-store."""
+    df = _load_data(source)
+
     if "timestamp" in df.columns:
         ts_dtype = df.schema["timestamp"]
         if not isinstance(ts_dtype, pl.Datetime):

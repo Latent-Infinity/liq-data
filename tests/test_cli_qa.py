@@ -1,28 +1,21 @@
-import json
 from pathlib import Path
 
 import polars as pl
 from typer.testing import CliRunner
 
 from liq.data.cli_qa import app
+from liq.data.settings import get_settings
+from liq.store.parquet import ParquetStore
 
 runner = CliRunner()
 
 
-def test_cli_qa_json(tmp_path: Path) -> None:
-    bars = [
-        {"timestamp": "2024-01-01T00:00:00Z", "open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10},
-        {"timestamp": "2024-01-01T00:01:00Z", "open": 1.5, "high": 2.5, "low": 1.0, "close": 2.0, "volume": 20},
-    ]
-    path = tmp_path / "bars.json"
-    path.write_text(json.dumps(bars))
-    result = runner.invoke(app, [str(path)])
-    assert result.exit_code == 0
-    assert "Missing ratio" in result.stdout or "Missing ratio" in result.output
-
-
-def test_cli_qa_parquet(tmp_path: Path) -> None:
+def test_cli_qa_storage(tmp_path: Path) -> None:
+    """QA should read data from liq-store-managed storage."""
     from datetime import datetime, timezone
+
+    store = ParquetStore(str(tmp_path))
+    storage_key = "oanda/EUR_USD/bars/1m"
 
     df = pl.DataFrame({
         "timestamp": [
@@ -35,7 +28,14 @@ def test_cli_qa_parquet(tmp_path: Path) -> None:
         "close": [1.5, 2.0],
         "volume": [10.0, 20.0],
     })
-    path = tmp_path / "bars.parquet"
-    df.write_parquet(path)
-    result = runner.invoke(app, [str(path)])
+    store.write(storage_key, df, mode="overwrite")
+
+    get_settings.cache_clear()
+    result = runner.invoke(app, [storage_key], env={"DATA_ROOT": str(tmp_path)})
     assert result.exit_code == 0
+
+
+def test_cli_qa_invalid_key() -> None:
+    """Invalid storage key should error."""
+    result = runner.invoke(app, ["invalid/key"])
+    assert result.exit_code != 0

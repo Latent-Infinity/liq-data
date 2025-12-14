@@ -29,16 +29,18 @@ Example:
 
 import logging
 from datetime import date
-from typing import Any
 
 import polars as pl
 
+from liq.core import BatchResult, FetchResult
+from liq.data.exceptions import DataError, RateLimitError
 from liq.data.policies import POLICIES
-from liq.data.exceptions import RateLimitError
 from liq.data.providers.base import BaseProvider
 from liq.data.rate_limiter import RateLimiter
 from liq.data.retry import retry
 from liq.store.protocols import TimeSeriesStore
+from liq.store import key_builder
+from liq.data.qa import validate_ohlc
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +161,11 @@ class DataFetcher:
             ]
         )
 
-        # Generate storage key: {asset_class}/{symbol}
-        storage_key = f"{self._asset_class}/{symbol}"
+        # Validate before write
+        validate_ohlc(df)
+
+        # Generate storage key via liq-store
+        storage_key = f"{self._provider.name}/{key_builder.bars(symbol, timeframe)}"
 
         # Store to storage backend
         self._store.write(storage_key, df, mode="append")
@@ -180,7 +185,7 @@ class DataFetcher:
         start: date,
         end: date,
         timeframe: str = "1d",
-    ) -> dict[str, dict[str, Any]]:
+    ) -> BatchResult:
         """Fetch and store data for multiple symbols.
 
         Continues fetching even if individual symbols fail, collecting
@@ -193,14 +198,8 @@ class DataFetcher:
             timeframe: Candle timeframe (default: "1d")
 
         Returns:
-            Dictionary mapping symbol to result:
-                {
-                    "symbol": {
-                        "success": True/False,
-                        "count": number of rows (if success),
-                        "error": error message (if failure)
-                    }
-                }
+            BatchResult containing FetchResult for each symbol with
+            success/failure status and counts.
         """
         logger.info(
             "fetching multiple symbols symbol_count=%d provider=%s",
@@ -208,29 +207,36 @@ class DataFetcher:
             self._provider.name,
         )
 
-        results: dict[str, dict[str, Any]] = {}
+        results: list[FetchResult] = []
 
         for symbol in symbols:
             try:
                 count = self.fetch_and_store(symbol, start, end, timeframe)
-                results[symbol] = {"success": True, "count": count}
+                results.append(FetchResult(symbol=symbol, success=True, count=count))
 
-            except Exception as e:
+            except DataError as e:
                 logger.error(
                     "failed to fetch symbol symbol=%s error=%s provider=%s",
                     symbol,
                     str(e),
                     self._provider.name,
                 )
-                results[symbol] = {"success": False, "error": str(e)}
+                results.append(FetchResult(symbol=symbol, success=False, error=str(e)))
 
         # Count successes
-        successes = sum(1 for r in results.values() if r["success"])
+        successes = sum(1 for r in results if r.success)
+        failures = len(results) - successes
+
         logger.info(
             "batch fetch complete total=%d successes=%d failures=%d",
             len(symbols),
             successes,
-            len(symbols) - successes,
+            failures,
         )
 
-        return results
+        return BatchResult(
+            total=len(results),
+            succeeded=successes,
+            failed=failures,
+            results=results,
+        )

@@ -37,6 +37,52 @@ from liq.store.parquet import ParquetStore
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
+def _find_data_root() -> Path:
+    """Find the data root directory by searching common locations.
+
+    Search order:
+    1. DATA_ROOT environment variable (if set)
+    2. Search upward from cwd for 'liq-data/data/financial_data'
+    3. Search upward from this file's location for 'data/financial_data'
+    4. Fall back to './data/financial_data'
+
+    Returns:
+        Path to data root directory
+    """
+    import os
+
+    # 1. Check environment variable first
+    env_root = os.environ.get("DATA_ROOT")
+    if env_root:
+        return Path(env_root)
+
+    # 2. Search upward from cwd for liq-data directory structure
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        # Check for monorepo structure: parent/liq-data/data/financial_data
+        candidate = parent / "liq-data" / "data" / "financial_data"
+        if candidate.exists():
+            return candidate
+        # Also check if we're inside liq-data already
+        candidate = parent / "data" / "financial_data"
+        if candidate.exists() and (parent / "src" / "liq" / "data").exists():
+            return candidate
+
+    # 3. Search from this file's location (handles installed package case)
+    this_file = Path(__file__).resolve()
+    for parent in this_file.parents:
+        candidate = parent / "data" / "financial_data"
+        if candidate.exists():
+            return candidate
+        # Check sibling liq-data directory
+        candidate = parent / "liq-data" / "data" / "financial_data"
+        if candidate.exists():
+            return candidate
+
+    # 4. Fall back to relative path (will be resolved to absolute later)
+    return Path("./data/financial_data")
+
 if TYPE_CHECKING:
     from liq.data.providers.alpaca import AlpacaProvider
     from liq.data.providers.binance import BinanceProvider
@@ -115,7 +161,7 @@ class LiqDataSettings(BaseSettings):
 
     # Storage settings
     data_root: Path = Field(
-        default=Path("./data/financial_data"), description="Root directory for data storage"
+        default_factory=_find_data_root, description="Root directory for data storage"
     )
 
     @field_validator("data_root", mode="after")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 import polars as pl
@@ -9,20 +10,66 @@ import polars as pl
 AggregationMethod = Literal["default"]
 
 
+_TF_PATTERN = re.compile(r"^(?P<value>\d+)(?P<unit>[mhd])$")
+
+
+def _timeframe_to_minutes(tf: str) -> int | None:
+    """Convert timeframe string to minutes for a set of standard frames."""
+    allowed: dict[str, int] = {
+        # minutes
+        "1m": 1,
+        "2m": 2,
+        "3m": 3,
+        "5m": 5,
+        "10m": 10,
+        "15m": 15,
+        "30m": 30,
+        # hours
+        "1h": 60,
+        "2h": 120,
+        "4h": 240,
+        "8h": 480,
+        "12h": 720,
+        # day
+        "1d": 1440,
+    }
+    if tf in allowed:
+        return allowed[tf]
+
+    # Permit any whole-minute frame that maps to hours/days to avoid brittle configs
+    match = _TF_PATTERN.match(tf)
+    if not match:
+        return None
+    value = int(match.group("value"))
+    unit = match.group("unit")
+    if unit == "m":
+        return value
+    if unit == "h":
+        return value * 60
+    if unit == "d":
+        return value * 1440
+    return None  # pragma: no cover - unit pattern already restricted
+
+
 def aggregate_bars(df: pl.DataFrame, timeframe: str, _method: AggregationMethod = "default") -> pl.DataFrame:
     """Aggregate 1m bars to a higher timeframe using provider-mimicking rules.
 
     Default rule: open=first, high=max, low=min, close=last, volume=sum.
+
+    Supported timeframes include common minutes/hours/day frames (e.g. 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d).
     """
 
     if df.is_empty():
         return df
 
-    # Only handle minute-based aggregation for now
-    if not timeframe.endswith("m"):
-        raise ValueError("Only minute-based aggregation supported for now")
-
-    minutes = int(timeframe[:-1])
+    # Parse timeframe to minutes
+    minutes = _timeframe_to_minutes(timeframe)
+    if minutes is None:
+        raise ValueError(
+            "Unsupported timeframe: {tf}. Use standard m/h/d frames like 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d".format(
+                tf=timeframe
+            )
+        )
     if minutes <= 1:
         return df
 

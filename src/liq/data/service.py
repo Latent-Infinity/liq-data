@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 from liq.store.parquet import ParquetStore
 from liq.store import key_builder
+from liq.data.aggregation import aggregate_bars
 
 from liq.data.gaps import classify_gaps, detect_gaps
 from liq.data.qa import validate_ohlc
@@ -166,6 +167,14 @@ class DataService:
         """
         storage_key = self._storage_key(provider, symbol, timeframe)
         if not self._store.exists(storage_key):
+            if timeframe != "1m":
+                base_key = self._storage_key(provider, symbol, "1m")
+                if self._store.exists(base_key):
+                    base_df = self._store.read(base_key, start=start, end=end)
+                    aggregated = aggregate_bars(base_df, timeframe)
+                    if not aggregated.is_empty():
+                        self._store.write(storage_key, aggregated, mode="overwrite")
+                    return aggregated
             raise FileNotFoundError(
                 f"Data not found for {provider}/{symbol}/{timeframe}. "
                 f"Run: ds.fetch('{provider}', '{symbol}', start, end, '{timeframe}')"

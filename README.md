@@ -7,7 +7,16 @@ Part of the Latent Infinity Quant (LIQ) ecosystem, `liq-data` handles data acqui
 
 - **Single Source of Truth**: All data reads/writes use `ParquetStore` from liq-store
 - **Automatic Deduplication**: Append operations merge data by timestamp automatically
-- **Consistent Storage Keys**: Bars use `provider/<symbol>/bars/<timeframe>` (e.g., `oanda/EUR_USD/bars/1m`). Quotes/fundamentals/corp actions use `provider/<symbol>/quotes|fundamentals|corp_actions`. Use `liq.store.key_builder` helpers to avoid drift.
+- **Consistent Storage Keys**: Bars use `provider/<symbol>/bars/<timeframe>` (e.g., `oanda/EUR_USD/bars/1m`). Quotes/fundamentals/corp actions use `provider/<symbol>/quotes|fundamentals|corp_actions`. Use `liq.store.key_builder` helpers to avoid drift. Higher timeframes are aggregated from 1m when missing.
+- **Supported rollups**: Standard frames (1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d, plus any whole-minute frame) are aggregated from 1m on demand and cached back to the store.
+
+| Requested timeframe | Source used           | Notes                          |
+|---------------------|-----------------------|--------------------------------|
+| 1m                  | 1m                    | Pass-through                   |
+| 5m / 15m / 30m      | 1m                    | Aggregated and cached          |
+| 1h / 2h / 4h / 8h   | 1m                    | Aggregated and cached          |
+| 12h / 1d / 2d       | 1m                    | Aggregated and cached          |
+| other N m/h/d       | 1m                    | Any whole-minute frame supported|
 - **SOLID/DRY Principles**: No direct parquet access (`pl.read_parquet`, `df.write_parquet`) in the codebase
 
 ### Usage Pattern
@@ -54,4 +63,12 @@ liq-data gaps --provider oanda --symbol EUR_USD --timeframe 1m --expected-minute
 
 # Validate provider credentials
 liq-data validate-credentials oanda
+
+# Load aggregated bars (1h from 1m on-the-fly)
+python - <<'PY'
+from liq.data.service import DataService
+ds = DataService()
+df_1h = ds.load("oanda", "EUR_USD", "1h")
+print(df_1h.head())
+PY
 ```

@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from datetime import timedelta, datetime, UTC
 
 import polars as pl
+from liq.data.providers.binance_status import (
+    fetch_binance_announcements,
+    maintenance_windows_from_announcements,
+)
 
 
 @dataclass
@@ -22,25 +26,32 @@ def classify_gaps(df: pl.DataFrame, policy: GapPolicy) -> pl.DataFrame:
     if df.is_empty():
         return df
     df = df.sort("timestamp")
+    df = df.with_columns(pl.col("timestamp").dt.weekday().alias("_weekday"))
     df = df.with_columns(
         [
             pl.col("timestamp").diff().alias("delta"),
         ]
     )
+    df = df.with_columns(pl.col("timestamp").shift(-1).alias("_next_ts"))
     expected = timedelta(minutes=policy.expected_gap_minutes) if policy.expected_gap_minutes else None
-    def classify(row_delta: timedelta | None) -> str:
+    def classify(row_delta: timedelta | None, weekday: int, next_ts: datetime | None) -> str:
         if row_delta is None:
             return "none"
-        # row_delta is a timedelta
+        if policy.mark_weekends and next_ts and next_ts.weekday() == 0 and weekday == 4 and row_delta.days >= 2:
+            return "weekend"
         if expected and row_delta <= expected:
             return "on_schedule"
         return "gap"
-    classified = df.with_columns(
-        [
-            pl.col("delta").map_elements(classify, return_dtype=pl.String).alias("gap_status")
-        ]
-    ).fill_null("none")
-    return classified
+
+    return (
+        df.with_columns(
+            pl.struct(["delta", "_weekday", "_next_ts"])
+            .map_elements(lambda s: classify(s["delta"], s["_weekday"], s["_next_ts"]), return_dtype=pl.String)
+            .alias("gap_status")
+        )
+        .fill_null("none")
+        .drop(["_weekday", "_next_ts"])
+    )
 
 
 def detect_gaps(df: pl.DataFrame, expected_interval: timedelta) -> list[tuple[datetime, datetime]]:

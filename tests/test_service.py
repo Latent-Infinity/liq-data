@@ -68,6 +68,27 @@ class TestDataServiceLoad:
         assert len(result) == 1
         assert "close" in result.columns
 
+    def test_load_aggregates_from_1m(self, tmp_path: Path) -> None:
+        """If higher timeframe missing, aggregate from 1m and persist."""
+        test_df = pl.DataFrame({
+            "timestamp": [
+                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+            ],
+            "open": [1.0, 1.1, 1.2],
+            "high": [1.1, 1.2, 1.3],
+            "low": [0.9, 1.0, 1.1],
+            "close": [1.05, 1.15, 1.25],
+            "volume": [10, 20, 30],
+        })
+        write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
+
+        ds = DataService(data_root=tmp_path)
+        result = ds.load("oanda", "EUR_USD", "2m")
+        assert len(result) == 2
+        assert ds.store.exists(f"oanda/{key_builder.bars('EUR_USD', '2m')}")
+
     def test_load_file_not_found(self, tmp_path: Path) -> None:
         """Test load raises FileNotFoundError for missing data."""
         ds = DataService(data_root=tmp_path)

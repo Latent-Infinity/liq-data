@@ -14,7 +14,9 @@ Features:
 """
 
 from datetime import UTC, date, datetime, timedelta
+import logging
 from typing import Any, cast
+from urllib.parse import urlencode
 
 import httpx
 import polars as pl
@@ -25,6 +27,8 @@ from liq.data.exceptions import (
     RateLimitError,
 )
 from liq.data.providers.base import BaseProvider
+
+logger = logging.getLogger(__name__)
 
 
 class TradeStationProvider(BaseProvider):
@@ -60,6 +64,9 @@ class TradeStationProvider(BaseProvider):
     # TradeStation API URLs
     BASE_URL = "https://api.tradestation.com/v3"
     AUTH_URL = "https://signin.tradestation.com/oauth/token"
+    AUTHORIZE_URL = "https://signin.tradestation.com/authorize"
+    DEFAULT_AUDIENCE = "https://api.tradestation.com"
+    DEFAULT_SCOPE = "openid profile offline_access MarketData ReadAccount Trade"
 
     # Timeframe to TradeStation unit/interval mapping
     TIMEFRAME_MAP = {
@@ -98,9 +105,6 @@ class TradeStationProvider(BaseProvider):
             raise ValueError("client_id is required for TradeStation provider")
         if not client_secret:
             raise ValueError("client_secret is required for TradeStation provider")
-        if not refresh_token:
-            raise ValueError("refresh_token is required for TradeStation provider")
-
         self._client_id = client_id
         self._client_secret = client_secret
         self._refresh_token = refresh_token
@@ -129,6 +133,65 @@ class TradeStationProvider(BaseProvider):
         """Return supported timeframes for TradeStation."""
         return list(self.TIMEFRAME_MAP.keys())
 
+    @property
+    def refresh_token(self) -> str | None:
+        """Return the current refresh token (may rotate)."""
+        return self._refresh_token
+
+    @classmethod
+    def build_authorization_url(
+        cls,
+        client_id: str,
+        redirect_uri: str,
+        scope: str | None = None,
+        state: str | None = None,
+        audience: str | None = None,
+    ) -> str:
+        """Build the TradeStation authorization URL for the Auth Code flow."""
+        params = {
+            "response_type": "code",
+            "client_id": client_id,
+            "audience": audience or cls.DEFAULT_AUDIENCE,
+            "redirect_uri": redirect_uri,
+            "scope": scope or cls.DEFAULT_SCOPE,
+        }
+        if state:
+            params["state"] = state
+        return f"{cls.AUTHORIZE_URL}?{urlencode(params)}"
+
+    @classmethod
+    def exchange_authorization_code(
+        cls,
+        client_id: str,
+        client_secret: str,
+        code: str,
+        redirect_uri: str,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        """Exchange an authorization code for access and refresh tokens."""
+        try:
+            response = httpx.post(
+                cls.AUTH_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=timeout,
+            )
+        except httpx.RequestError as e:
+            raise AuthenticationError(f"OAuth2 auth-code exchange failed: {e}") from e
+
+        if response.status_code != 200:
+            raise AuthenticationError(
+                f"OAuth2 auth-code exchange failed: {response.status_code} - {response.text}"
+            )
+
+        return cast(dict[str, Any], response.json())
+
     def _ensure_authenticated(self) -> None:
         """Ensure we have a valid access token, refreshing if needed."""
         now = datetime.now(UTC)
@@ -140,6 +203,12 @@ class TradeStationProvider(BaseProvider):
             and now < self._token_expires_at - timedelta(seconds=60)
         ):
             return
+
+        if not self._refresh_token:
+            raise AuthenticationError(
+                "TradeStation refresh token not configured. "
+                "Generate one via the auth code flow and set TRADESTATION_REFRESH_TOKEN."
+            )
 
         # Refresh the token
         client = self._get_client()
@@ -169,7 +238,22 @@ class TradeStationProvider(BaseProvider):
 
         # Update refresh token if a new one was issued
         if "refresh_token" in data:
-            self._refresh_token = data["refresh_token"]
+            new_refresh = data["refresh_token"]
+            if new_refresh and new_refresh != self._refresh_token:
+                from liq.data.settings import get_settings, persist_env_value
+
+                settings = get_settings()
+                if settings.tradestation_persist_refresh_token:
+                    persist_env_value("TRADESTATION_REFRESH_TOKEN", new_refresh)
+                    logger.info(
+                        "TradeStation refresh token rotated and persisted to .env."
+                    )
+                else:
+                    logger.warning(
+                        "TradeStation refresh token rotated; update TRADESTATION_REFRESH_TOKEN "
+                        "to persist it across runs."
+                    )
+                self._refresh_token = new_refresh
 
     def _make_request(
         self,

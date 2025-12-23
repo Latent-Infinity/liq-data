@@ -48,6 +48,22 @@ df = store.read(key)
 store.write(key, df, mode="append")
 ```
 
+### TradeStation Auth Code Flow
+
+TradeStation uses Auth0 authorization code flow to obtain refresh tokens.
+Configure these in `.env` (see `.env.example`), then:
+
+```bash
+# Step 1: Generate authorization URL
+python -m liq.data.cli tradestation-auth-url
+
+# Step 2: Exchange the returned code for a refresh token
+python -m liq.data.cli tradestation-exchange-code YOUR_CODE
+```
+
+If TradeStation rotates refresh tokens, liq-data can persist updates back to `.env`
+when `TRADESTATION_PERSIST_REFRESH_TOKEN=true` (default).
+
 ## QA CLI
 
 Run bar-level QA checks on stored data or files:

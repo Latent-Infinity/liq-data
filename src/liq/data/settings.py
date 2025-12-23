@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 import polars as pl
 from liq.store import key_builder
 from liq.store.parquet import ParquetStore
+import logging
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -133,6 +134,17 @@ class LiqDataSettings(BaseSettings):
     )
     tradestation_refresh_token: str | None = Field(
         default=None, description="TradeStation OAuth2 refresh token"
+    )
+    tradestation_redirect_uri: str | None = Field(
+        default=None, description="TradeStation OAuth2 redirect URI for auth code flow"
+    )
+    tradestation_scopes: str = Field(
+        default="openid profile offline_access MarketData ReadAccount Trade",
+        description="TradeStation OAuth2 scopes for auth code flow",
+    )
+    tradestation_persist_refresh_token: bool = Field(
+        default=True,
+        description="Persist rotated TradeStation refresh tokens back to .env",
     )
 
     # Coinbase settings
@@ -425,6 +437,31 @@ def get_store() -> ParquetStore:
     """
     settings = get_settings()
     return ParquetStore(str(settings.data_root))
+
+
+def persist_env_value(key: str, value: str, env_path: Path | None = None) -> None:
+    """Persist a key=value pair to the .env file, updating if it exists."""
+    path = env_path or Path(".env")
+    logger = logging.getLogger(__name__)
+
+    try:
+        lines = []
+        found = False
+        if path.exists():
+            raw = path.read_text(encoding="utf-8").splitlines()
+            for line in raw:
+                if line.startswith(f"{key}="):
+                    lines.append(f"{key}={value}")
+                    found = True
+                else:
+                    lines.append(line)
+        if not found:
+            if lines and lines[-1].strip() != "":
+                lines.append("")
+            lines.append(f"{key}={value}")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Failed to persist %s to %s: %s", key, path, exc)
 
 
 def get_storage_key(provider: str, symbol: str, timeframe: str) -> str:

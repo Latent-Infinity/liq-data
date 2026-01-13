@@ -85,6 +85,27 @@ def test_dynamic_hour_frame_supported_via_pattern() -> None:
     assert result.height == 1
 
 
+def test_aggregate_aligns_to_wall_clock() -> None:
+    """Aggregation should align to calendar boundaries, not first timestamp."""
+    df = pl.DataFrame({
+        "timestamp": [
+            datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+            datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+            datetime(2024, 1, 1, 0, 4, tzinfo=UTC),
+            datetime(2024, 1, 1, 0, 5, tzinfo=UTC),
+        ],
+        "open": [1.0, 1.1, 1.2, 1.3],
+        "high": [1.1, 1.2, 1.3, 1.4],
+        "low": [0.9, 1.0, 1.1, 1.2],
+        "close": [1.05, 1.15, 1.25, 1.35],
+        "volume": [10, 20, 30, 40],
+    })
+
+    result = aggregate_bars(df, "5m")
+    assert result.height == 2
+    assert result["timestamp"][0] == datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+
+
 @pytest.mark.parametrize("timeframe, expected_rows", [
     ("5m", 1),
     ("15m", 1),

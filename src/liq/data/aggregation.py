@@ -73,16 +73,31 @@ def aggregate_bars(df: pl.DataFrame, timeframe: str, _method: AggregationMethod 
     if minutes <= 1:
         return df
 
-    # Bucket timestamps
+    # Bucket timestamps aligned to wall-clock boundaries
     df = df.sort("timestamp")
-    start = df[0, "timestamp"]
     bucketed = df.with_columns(
-        (pl.col("timestamp") - start).dt.total_minutes().floordiv(minutes).alias("bucket")
+        pl.col("timestamp").dt.truncate("1d").alias("_day_start")
+    ).with_columns(
+        (
+            (pl.col("timestamp") - pl.col("_day_start"))
+            .dt.total_seconds()
+            .floordiv(60)
+        ).alias("_minutes_since_day")
+    ).with_columns(
+        (
+            pl.col("_minutes_since_day")
+            .floordiv(minutes)
+            * minutes
+        ).cast(pl.Int64).alias("_bucket_minutes")
+    ).with_columns(
+        (
+            pl.col("_day_start") + pl.duration(minutes=pl.col("_bucket_minutes"))
+        ).alias("bucket")
     )
 
-    agg = bucketed.group_by("bucket").agg(
+    agg = bucketed.group_by("bucket", maintain_order=True).agg(
         [
-            pl.col("timestamp").first().alias("timestamp"),
+            pl.col("bucket").first().alias("timestamp"),
             pl.col("open").first().alias("open"),
             pl.col("high").max().alias("high"),
             pl.col("low").min().alias("low"),

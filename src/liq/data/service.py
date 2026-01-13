@@ -32,9 +32,11 @@ Example:
 from __future__ import annotations
 
 from datetime import date, timedelta, datetime, UTC
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import logging
 import polars as pl
 from liq.store.parquet import ParquetStore
 from liq.store import key_builder
@@ -55,6 +57,8 @@ from liq.data.settings import (
 
 if TYPE_CHECKING:
     from liq.data.protocols import DataProvider
+
+logger = logging.getLogger(__name__)
 
 
 class DataService:
@@ -145,7 +149,11 @@ class DataService:
         timeframe: str,
         start: date | None = None,
         end: date | None = None,
-    ) -> pl.DataFrame:
+        columns: list[str] | None = None,
+        *,
+        streaming: bool = False,
+        batch_size: int | None = None,
+    ) -> pl.DataFrame | Iterator[pl.DataFrame]:
         """Load data for a symbol from storage.
 
         Args:
@@ -154,6 +162,9 @@ class DataService:
             timeframe: Timeframe (e.g., "1m", "1h", "1d")
             start: Optional start date filter (inclusive)
             end: Optional end date filter (inclusive)
+            columns: Optional column subset
+            streaming: Use Polars streaming engine (memory-efficient)
+            batch_size: If set, yield DataFrames in batches
 
         Returns:
             DataFrame with OHLCV data
@@ -166,11 +177,50 @@ class DataService:
             >>> df = ds.load("oanda", "EUR_USD", "1m")
         """
         storage_key = self._storage_key(provider, symbol, timeframe)
+        if self._store.exists(storage_key) and timeframe != "1m":
+            base_key = self._storage_key(provider, symbol, "1m")
+            if start is None and end is None and self._store.exists(base_key):
+                base_latest_df = self._store.read_latest(base_key, n=1)
+                target_latest_df = self._store.read_latest(storage_key, n=1)
+                if not base_latest_df.is_empty() and not target_latest_df.is_empty():
+                    base_latest = base_latest_df["timestamp"][0]
+                    target_latest = target_latest_df["timestamp"][0]
+                    if isinstance(base_latest, datetime) and base_latest.tzinfo is None:
+                        base_latest = base_latest.replace(tzinfo=UTC)
+                    if isinstance(target_latest, datetime) and target_latest.tzinfo is None:
+                        target_latest = target_latest.replace(tzinfo=UTC)
+                    if base_latest > target_latest:
+                        logger.info(
+                            "Refreshing cached %s aggregate for %s/%s: base range %s-%s exceeds cached %s-%s",
+                            timeframe,
+                            provider,
+                            symbol,
+                            base_latest,
+                            base_latest,
+                            target_latest,
+                            target_latest,
+                        )
+                        base_df = self._store.read(
+                            base_key,
+                            streaming=streaming,
+                        )
+                        aggregated = aggregate_bars(base_df, timeframe)
+                        if not aggregated.is_empty():
+                            self._store.write(storage_key, aggregated, mode="overwrite")
         if not self._store.exists(storage_key):
             if timeframe != "1m":
                 base_key = self._storage_key(provider, symbol, "1m")
                 if self._store.exists(base_key):
-                    base_df = self._store.read(base_key, start=start, end=end)
+                    if batch_size is not None:
+                        raise ValueError(
+                            "batch_size is not supported for aggregated reads"
+                        )
+                    base_df = self._store.read(
+                        base_key,
+                        start=start,
+                        end=end,
+                        streaming=streaming,
+                    )
                     aggregated = aggregate_bars(base_df, timeframe)
                     if not aggregated.is_empty():
                         self._store.write(storage_key, aggregated, mode="overwrite")
@@ -179,7 +229,40 @@ class DataService:
                 f"Data not found for {provider}/{symbol}/{timeframe}. "
                 f"Run: ds.fetch('{provider}', '{symbol}', start, end, '{timeframe}')"
             )
-        return self._store.read(storage_key, start=start, end=end)
+        return self._store.read(
+            storage_key,
+            start=start,
+            end=end,
+            columns=columns,
+            streaming=streaming,
+            batch_size=batch_size,
+        )
+
+    def iter_batches(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        start: date | None = None,
+        end: date | None = None,
+        columns: list[str] | None = None,
+        *,
+        batch_size: int = 100_000,
+    ) -> Iterator[pl.DataFrame]:
+        """Iterate over data in batches for memory-efficient processing."""
+        result = self.load(
+            provider,
+            symbol,
+            timeframe,
+            start=start,
+            end=end,
+            columns=columns,
+            batch_size=batch_size,
+        )
+        if isinstance(result, pl.DataFrame):
+            yield result
+            return
+        yield from result
 
     def list_symbols(self, provider: str | None = None) -> list[dict[str, str]]:
         """List available data files.
@@ -201,7 +284,7 @@ class DataService:
         result = []
         for key in keys:
             parts = key.split("/")
-            if len(parts) >= 4:  # provider/symbol/bars/timeframe
+            if len(parts) >= 4 and parts[2] == "bars":  # provider/symbol/bars/timeframe
                 result.append({
                     "provider": parts[0],
                     "symbol": parts[1],
@@ -269,7 +352,7 @@ class DataService:
             raise ValueError(f"Provider {provider} does not support quotes")
         df = prov.fetch_quotes(symbol, start, end)
         if save:
-            key = f"{provider}/{symbol}/quotes"
+            key = f"{provider}/{key_builder.quotes(symbol)}"
             self._store.write(key, df, mode=mode)
         return df
 
@@ -286,7 +369,7 @@ class DataService:
             raise ValueError(f"Provider {provider} does not support fundamentals")
         data = prov.fetch_fundamentals(symbol, as_of)
         if save:
-            key = f"{provider}/{symbol}/fundamentals"
+            key = f"{provider}/{key_builder.fundamentals(symbol)}"
             self._store.write(key, pl.DataFrame([data]), mode="overwrite")
         return data
 
@@ -304,7 +387,7 @@ class DataService:
             raise ValueError(f"Provider {provider} does not support corporate actions")
         actions = prov.get_corporate_actions(symbol, start, end)
         if save and actions:
-            key = f"{provider}/{symbol}/corp_actions"
+            key = f"{provider}/{key_builder.corp_actions(symbol)}"
             self._store.write(key, pl.DataFrame(actions), mode="overwrite")
         return actions
 

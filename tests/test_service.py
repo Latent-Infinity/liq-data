@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import logging
 import polars as pl
 import pytest
 from liq.store.parquet import ParquetStore
@@ -89,6 +90,44 @@ class TestDataServiceLoad:
         assert len(result) == 2
         assert ds.store.exists(f"oanda/{key_builder.bars('EUR_USD', '2m')}")
 
+    def test_load_refreshes_aggregate_when_1m_updates(self, tmp_path: Path, caplog) -> None:
+        """Aggregates should refresh when base 1m data extends beyond cached range."""
+        base_df = pl.DataFrame({
+            "timestamp": [
+                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+            ],
+            "open": [1.0, 1.1],
+            "high": [1.1, 1.2],
+            "low": [0.9, 1.0],
+            "close": [1.05, 1.15],
+            "volume": [10, 20],
+        })
+        write_test_data(tmp_path, "oanda", "EUR_USD", "1m", base_df)
+
+        ds = DataService(data_root=tmp_path)
+        result = ds.load("oanda", "EUR_USD", "2m")
+        assert result.height == 1
+
+        new_df = pl.DataFrame({
+            "timestamp": [
+                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+            ],
+            "open": [1.2, 1.3],
+            "high": [1.3, 1.4],
+            "low": [1.1, 1.2],
+            "close": [1.25, 1.35],
+            "volume": [30, 40],
+        })
+        ds.store.write(f"oanda/{key_builder.bars('EUR_USD', '1m')}", new_df, mode="append")
+
+        with caplog.at_level(logging.INFO):
+            refreshed = ds.load("oanda", "EUR_USD", "2m")
+        assert refreshed.height == 2
+        assert refreshed["timestamp"].max() == datetime(2024, 1, 1, 0, 2, tzinfo=UTC)
+        assert "Refreshing cached 2m aggregate" in caplog.text
+
     def test_load_file_not_found(self, tmp_path: Path) -> None:
         """Test load raises FileNotFoundError for missing data."""
         ds = DataService(data_root=tmp_path)
@@ -120,6 +159,27 @@ class TestDataServiceList:
         providers = [r["provider"] for r in result]
         assert "oanda" in providers
         assert "binance" in providers
+
+    def test_list_symbols_ignores_non_bars(self, tmp_path: Path) -> None:
+        """Non-bars keys should not appear in list_symbols output."""
+        write_test_data(tmp_path, "oanda", "EUR_USD", "1m", pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}))
+        store = ParquetStore(str(tmp_path))
+        store.write(
+            "oanda/EUR_USD/features/test_v1",
+            pl.DataFrame({"feature": [1.0]}),
+            mode="overwrite",
+        )
+        store.write(
+            "oanda/EUR_USD/quotes",
+            pl.DataFrame({"bid": [1.0], "ask": [1.1]}),
+            mode="overwrite",
+        )
+
+        ds = DataService(data_root=tmp_path)
+        result = ds.list_symbols()
+
+        assert len(result) == 1
+        assert result[0]["symbol"] == "EUR_USD"
 
     def test_list_symbols_by_provider(self, tmp_path: Path) -> None:
         """Test list_symbols can filter by provider."""

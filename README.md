@@ -8,7 +8,7 @@ Part of the Latent Infinity Quant (LIQ) ecosystem, `liq-data` handles data acqui
 - **Single Source of Truth**: All data reads/writes use `ParquetStore` from liq-store
 - **Automatic Deduplication**: Append operations merge data by timestamp automatically
 - **Consistent Storage Keys**: Bars use `provider/<symbol>/bars/<timeframe>` (e.g., `oanda/EUR_USD/bars/1m`). Quotes/fundamentals/corp actions use `provider/<symbol>/quotes|fundamentals|corp_actions`. Use `liq.store.key_builder` helpers to avoid drift. Higher timeframes are aggregated from 1m when missing.
-- **Supported rollups**: Standard frames (1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d, plus any whole-minute frame) are aggregated from 1m on demand and cached back to the store.
+- **Supported rollups**: Standard frames (1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d, plus any whole-minute frame) are aggregated from 1m on demand and cached back to the store, aligned to wall-clock boundaries.
 
 | Requested timeframe | Source used           | Notes                          |
 |---------------------|-----------------------|--------------------------------|

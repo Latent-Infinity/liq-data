@@ -10,8 +10,9 @@ from typer.testing import CliRunner
 from liq.store import key_builder
 
 from liq.data.cli import app
-from liq.data.cli.common import parse_date
-from liq.data.exceptions import ProviderError
+from liq.data.cli.common import create_fetch_progress, get_provider, parse_date, parse_source_spec, storage_key
+from liq.data.exceptions import AuthenticationError, ProviderError
+import typer
 from liq.store.parquet import ParquetStore
 
 runner = CliRunner()
@@ -52,6 +53,42 @@ class TestParseDate:
         """Test that invalid date raises ValueError."""
         with pytest.raises(ValueError):
             parse_date("2024-02-30")
+
+
+class TestCommonHelpers:
+    """Tests for CLI common helpers."""
+
+    def test_storage_key_uses_bars_layout(self) -> None:
+        assert storage_key("oanda", "EUR_USD", "1m") == "oanda/EUR_USD/bars/1m"
+
+    def test_parse_source_spec_invalid(self) -> None:
+        with pytest.raises(ValueError):
+            parse_source_spec("oanda")
+
+    def test_get_provider_unknown(self) -> None:
+        with pytest.raises(typer.Exit):
+            get_provider("unknown")
+
+    def test_get_provider_config_error(self) -> None:
+        with patch("liq.data.cli.common.create_oanda_provider", side_effect=ValueError("bad config")):
+            with pytest.raises(typer.Exit):
+                get_provider("oanda")
+
+    def test_get_provider_supported_names(self) -> None:
+        with patch("liq.data.cli.common.create_binance_provider", return_value=MagicMock()):
+            assert get_provider("binance")
+        with patch("liq.data.cli.common.create_tradestation_provider", return_value=MagicMock()):
+            assert get_provider("tradestation")
+        with patch("liq.data.cli.common.create_coinbase_provider", return_value=MagicMock()):
+            assert get_provider("coinbase")
+        with patch("liq.data.cli.common.create_polygon_provider", return_value=MagicMock()):
+            assert get_provider("polygon")
+        with patch("liq.data.cli.common.create_alpaca_provider", return_value=MagicMock()):
+            assert get_provider("alpaca")
+
+    def test_create_fetch_progress(self) -> None:
+        progress = create_fetch_progress()
+        assert progress is not None
 
 
 class TestConfigCommand:
@@ -219,6 +256,206 @@ class TestValidateCommand:
             assert result.exit_code == 0
             assert "Validation Summary" in result.output
 
+
+class TestAuthCommands:
+    """Tests for TradeStation auth helpers."""
+
+    def test_tradestation_auth_url_requires_client_id(self) -> None:
+        """Missing client ID should return an error."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = None
+            mock.tradestation_redirect_uri = "https://example.com/callback"
+            mock.tradestation_scopes = "scope"
+            mock_settings.return_value = mock
+
+            result = runner.invoke(app, ["tradestation-auth-url"])
+
+            assert result.exit_code == 1
+            assert "not configured" in result.output.lower()
+
+    def test_tradestation_auth_url_success(self) -> None:
+        """Auth URL command should print state and URL."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = "client"
+            mock.tradestation_redirect_uri = "https://example.com/callback"
+            mock.tradestation_scopes = "scope"
+            mock_settings.return_value = mock
+
+            with patch("liq.data.providers.tradestation.TradeStationProvider.build_authorization_url") as mock_build:
+                mock_build.return_value = "https://auth.example.com"
+                result = runner.invoke(app, ["tradestation-auth-url", "--state", "state123"])
+
+            assert result.exit_code == 0
+            assert "state123" in result.output
+            assert "https://auth.example.com" in result.output
+
+    def test_tradestation_auth_url_requires_redirect(self) -> None:
+        """Missing redirect should return an error."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = "client"
+            mock.tradestation_redirect_uri = None
+            mock.tradestation_scopes = "scope"
+            mock_settings.return_value = mock
+
+            result = runner.invoke(app, ["tradestation-auth-url"])
+
+            assert result.exit_code == 1
+            assert "redirect uri" in result.output.lower()
+
+    def test_tradestation_exchange_code_requires_secret(self) -> None:
+        """Missing client secret should return an error."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = "client"
+            mock.tradestation_client_secret = None
+            mock.tradestation_redirect_uri = "https://example.com/callback"
+            mock_settings.return_value = mock
+
+            result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
+
+            assert result.exit_code == 1
+            assert "not configured" in result.output.lower()
+
+    def test_tradestation_exchange_code_success(self) -> None:
+        """Exchange code command should print refresh token."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = "client"
+            mock.tradestation_client_secret = "secret"
+            mock.tradestation_redirect_uri = "https://example.com/callback"
+            mock_settings.return_value = mock
+
+            with patch("liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code") as mock_exchange:
+                mock_exchange.return_value = {"refresh_token": "refresh123"}
+                result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
+
+            assert result.exit_code == 0
+            assert "refresh123" in result.output
+
+    def test_tradestation_exchange_code_auth_failure(self) -> None:
+        """Auth exchange errors should be surfaced."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = "client"
+            mock.tradestation_client_secret = "secret"
+            mock.tradestation_redirect_uri = "https://example.com/callback"
+            mock_settings.return_value = mock
+
+            with patch("liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code") as mock_exchange:
+                mock_exchange.side_effect = AuthenticationError("bad code")
+                result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
+
+            assert result.exit_code == 1
+            assert "auth code exchange failed" in result.output.lower()
+
+    def test_tradestation_exchange_code_requires_redirect(self) -> None:
+        """Missing redirect should return an error."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = "client"
+            mock.tradestation_client_secret = "secret"
+            mock.tradestation_redirect_uri = None
+            mock_settings.return_value = mock
+
+            result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
+
+            assert result.exit_code == 1
+            assert "redirect" in result.output.lower()
+
+    def test_tradestation_exchange_code_missing_refresh_token(self) -> None:
+        """Missing refresh token should be surfaced."""
+        with patch("liq.data.cli.auth.get_settings") as mock_settings:
+            mock = MagicMock()
+            mock.tradestation_client_id = "client"
+            mock.tradestation_client_secret = "secret"
+            mock.tradestation_redirect_uri = "https://example.com/callback"
+            mock_settings.return_value = mock
+
+            with patch("liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code") as mock_exchange:
+                mock_exchange.return_value = {"access_token": "token"}
+                result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
+
+            assert result.exit_code == 1
+            assert "no refresh token" in result.output.lower()
+
+
+class TestFetchCommandEdgeCases:
+    """Tests for fetch command error handling and validate edge cases."""
+
+    def test_fetch_handles_value_error(self) -> None:
+        with patch("liq.data.cli.fetch.DataService") as mock_service:
+            mock_service.return_value.fetch.side_effect = ValueError("bad input")
+            result = runner.invoke(
+                app,
+                ["fetch", "oanda", "EUR_USD", "--start", "2024-01-01"],
+            )
+        assert result.exit_code == 1
+        assert "bad input" in result.output.lower()
+
+    def test_fetch_handles_provider_error(self) -> None:
+        with patch("liq.data.cli.fetch.DataService") as mock_service:
+            mock_service.return_value.fetch.side_effect = ProviderError("provider down")
+            result = runner.invoke(
+                app,
+                ["fetch", "oanda", "EUR_USD", "--start", "2024-01-01"],
+            )
+        assert result.exit_code == 1
+        assert "provider error" in result.output.lower()
+
+    def test_fetch_no_data_returns_success(self) -> None:
+        mock_df = pl.DataFrame({"timestamp": pl.Series([], dtype=pl.Datetime("us", "UTC"))})
+        with patch("liq.data.cli.fetch.DataService") as mock_service:
+            mock_service.return_value.fetch.return_value = mock_df
+            result = runner.invoke(
+                app,
+                ["fetch", "oanda", "EUR_USD", "--start", "2024-01-01"],
+            )
+        assert result.exit_code == 0
+        assert "no data returned" in result.output.lower()
+
+    def test_fetch_dry_run_shows_preview(self) -> None:
+        df = pl.DataFrame({
+            "timestamp": [
+                datetime(2024, 1, 1, tzinfo=timezone.utc),
+                datetime(2024, 1, 2, tzinfo=timezone.utc),
+            ],
+            "open": [1.0, 1.1],
+            "high": [1.1, 1.2],
+            "low": [0.9, 1.0],
+            "close": [1.05, 1.15],
+            "volume": [100.0, 200.0],
+        })
+        with patch("liq.data.cli.fetch.DataService") as mock_service:
+            mock_service.return_value.fetch.return_value = df
+            result = runner.invoke(
+                app,
+                ["fetch", "oanda", "EUR_USD", "--start", "2024-01-01", "--dry-run"],
+            )
+        assert result.exit_code == 0
+        assert "Fetched" in result.output
+        assert "Stored via liq-store" not in result.output
+
+    def test_backfill_runs_successfully(self) -> None:
+        df = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.05],
+            "volume": [100.0],
+        })
+        with patch("liq.data.cli.fetch.DataService") as mock_service:
+            mock_service.return_value.backfill.return_value = df
+            result = runner.invoke(
+                app,
+                ["backfill", "oanda", "EUR_USD", "--start", "2024-01-01", "--end", "2024-01-02"],
+            )
+        assert result.exit_code == 0
+        assert "Backfill complete" in result.output
+
     def test_detects_null_values(self, tmp_path: Path) -> None:
         """Test validate command detects null values."""
         store = ParquetStore(str(tmp_path))
@@ -313,6 +550,57 @@ class TestValidateCommand:
 
             assert result.exit_code == 0
             assert "Negative" in result.output
+
+    def test_detects_duplicates_unsorted_and_gaps(self) -> None:
+        df = pl.DataFrame({
+            "timestamp": [
+                datetime(2024, 1, 1, 0, 2),
+                datetime(2024, 1, 1, 0, 0),
+                datetime(2024, 1, 1, 0, 0),
+                datetime(2024, 1, 1, 0, 10),
+            ],
+            "open": [1.0, 1.0, 1.0, 1.1],
+            "high": [1.1, 1.1, 1.1, 1.2],
+            "low": [0.9, 0.9, 0.9, 1.0],
+            "close": [1.05, 1.05, 1.05, 1.15],
+            "volume": [100.0, 100.0, 100.0, 200.0],
+        })
+        store = MagicMock()
+        store.exists.return_value = True
+        store.read.return_value = df
+        with patch("liq.data.cli.validate.get_store", return_value=store):
+            result = runner.invoke(app, ["validate", "oanda", "EUR_USD"])
+
+        assert result.exit_code == 0
+        assert "Duplicate timestamps" in result.output
+        assert "Timestamps not sorted" in result.output
+        assert "Unexpected gaps" in result.output
+
+    def test_detects_multiple_ohlc_consistency_issues(self) -> None:
+        df = pl.DataFrame({
+            "timestamp": [
+                datetime(2024, 1, 1, 0, 0),
+                datetime(2024, 1, 1, 0, 1),
+                datetime(2024, 1, 1, 0, 2),
+                datetime(2024, 1, 1, 0, 3),
+            ],
+            "open": [1.0, 1.0, 1.0, 1.0],
+            "high": [0.9, 0.9, 1.2, 1.2],
+            "low": [0.8, 0.7, 1.1, 0.8],
+            "close": [0.85, 1.1, 1.05, 0.7],
+            "volume": [100.0, 100.0, 100.0, 100.0],
+        })
+        store = MagicMock()
+        store.exists.return_value = True
+        store.read.return_value = df
+        with patch("liq.data.cli.validate.get_store", return_value=store):
+            result = runner.invoke(app, ["validate", "oanda", "EUR_USD"])
+
+        assert result.exit_code == 0
+        assert "High < Open" in result.output
+        assert "High < Close" in result.output
+        assert "Low > Open" in result.output
+        assert "Low > Close" in result.output
 
 
 class TestStatsCommand:
@@ -824,6 +1112,29 @@ class TestAuditCommand:
 
             assert result.exit_code == 0
 
+    def test_audit_shows_gap_details_and_summary(self) -> None:
+        df = pl.DataFrame({
+            "timestamp": [
+                datetime(2024, 1, 1, 10, 0),
+                datetime(2024, 1, 1, 10, 10),
+            ],
+            "open": [1.0, 1.1],
+            "high": [1.1, 1.2],
+            "low": [0.9, 1.0],
+            "close": [1.05, 1.15],
+            "volume": [100.0, 200.0],
+        })
+        store = MagicMock()
+        store.exists.return_value = True
+        store.read.return_value = df
+
+        with patch("liq.data.cli.validate.get_store", return_value=store):
+            result = runner.invoke(app, ["audit", "oanda", "EUR_USD"])
+
+        assert result.exit_code == 0
+        assert "Gap Details" in result.output
+        assert "Issues found" in result.output
+
 
 class TestHealthReportCommand:
     """Tests for the health-report command."""
@@ -909,6 +1220,32 @@ class TestHealthReportCommand:
             assert result.exit_code == 0
             # Should have some summary or status info
             assert "Health" in result.output or "Report" in result.output or "oanda" in result.output
+
+    def test_health_report_skips_bad_keys_and_errors(self) -> None:
+        df = pl.DataFrame({
+            "timestamp": [datetime(2024, 1, 1)],
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.05],
+            "volume": [100.0],
+        })
+        store = MagicMock()
+        store.list_keys.return_value = ["badkey", "oanda/EUR_USD/bars/1m", "broken/EUR_USD/bars/1m"]
+
+        def read_side_effect(key: str) -> pl.DataFrame:
+            if key.startswith("broken/"):
+                raise pl.exceptions.ComputeError("bad data")
+            return df
+
+        store.read.side_effect = read_side_effect
+        store.get_date_range.return_value = (date(2024, 1, 1), date(2024, 1, 1))
+
+        with patch("liq.data.cli.validate.get_store", return_value=store):
+            result = runner.invoke(app, ["health-report"])
+
+        assert result.exit_code == 0
+        assert "Health Report" in result.output
 
 
 class TestCompareCommand:

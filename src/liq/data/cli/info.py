@@ -62,27 +62,42 @@ def show_config() -> None:
     """Show current configuration."""
     settings = get_settings()
 
+    def _mask(value: object, missing_label: str) -> str:
+        if isinstance(value, str):
+            return "***" if value else missing_label
+        return "***" if value else missing_label
+
+    def _render(value: object, missing_label: str) -> str:
+        if value is None:
+            return missing_label
+        if isinstance(value, str):
+            return value if value else missing_label
+        return str(value)
+
     table = Table(title="LIQ Data Configuration")
     table.add_column("Setting", style="cyan")
     table.add_column("Value", style="green")
 
-    table.add_row("OANDA API Key", "***" if settings.oanda_api_key else "[red]Not set[/red]")
-    table.add_row("OANDA Account ID", settings.oanda_account_id or "[red]Not set[/red]")
-    table.add_row("OANDA Environment", settings.oanda_environment)
-    table.add_row("Binance API Key", "***" if settings.binance_api_key else "[dim]Not set[/dim]")
-    table.add_row("Binance Use US", str(settings.binance_use_us))
-    table.add_row("TradeStation Client ID", "***" if settings.tradestation_client_id else "[dim]Not set[/dim]")
-    table.add_row("TradeStation Refresh Token", "***" if settings.tradestation_refresh_token else "[dim]Not set[/dim]")
-    table.add_row("TradeStation Redirect URI", settings.tradestation_redirect_uri or "[dim]Not set[/dim]")
-    table.add_row("TradeStation Scopes", settings.tradestation_scopes or "[dim]Not set[/dim]")
-    table.add_row("TradeStation Persist Refresh Token", str(settings.tradestation_persist_refresh_token))
-    table.add_row("Coinbase API Key", "***" if settings.coinbase_api_key else "[dim]Not set[/dim]")
-    table.add_row("Coinbase Passphrase", "***" if settings.coinbase_passphrase else "[dim]Not set[/dim]")
-    table.add_row("Polygon API Key", "***" if settings.polygon_api_key else "[dim]Not set[/dim]")
-    table.add_row("Data Root", str(settings.data_root))
-    table.add_row("Log Level", settings.log_level)
-    table.add_row("Log Format", settings.log_format)
-    table.add_row("Log File", str(settings.log_file) if settings.log_file else "[dim]None[/dim]")
+    table.add_row("OANDA API Key", _mask(settings.oanda_api_key, "[red]Not set[/red]"))
+    table.add_row("OANDA Account ID", _render(settings.oanda_account_id, "[red]Not set[/red]"))
+    table.add_row("OANDA Environment", _render(settings.oanda_environment, "[red]Not set[/red]"))
+    table.add_row("Binance API Key", _mask(settings.binance_api_key, "[dim]Not set[/dim]"))
+    table.add_row("Binance Use US", _render(settings.binance_use_us, "[dim]Not set[/dim]"))
+    table.add_row("TradeStation Client ID", _mask(settings.tradestation_client_id, "[dim]Not set[/dim]"))
+    table.add_row("TradeStation Refresh Token", _mask(settings.tradestation_refresh_token, "[dim]Not set[/dim]"))
+    table.add_row("TradeStation Redirect URI", _render(settings.tradestation_redirect_uri, "[dim]Not set[/dim]"))
+    table.add_row("TradeStation Scopes", _render(settings.tradestation_scopes, "[dim]Not set[/dim]"))
+    table.add_row(
+        "TradeStation Persist Refresh Token",
+        _render(settings.tradestation_persist_refresh_token, "[dim]Not set[/dim]"),
+    )
+    table.add_row("Coinbase API Key", _mask(settings.coinbase_api_key, "[dim]Not set[/dim]"))
+    table.add_row("Coinbase Passphrase", _mask(settings.coinbase_passphrase, "[dim]Not set[/dim]"))
+    table.add_row("Polygon API Key", _mask(settings.polygon_api_key, "[dim]Not set[/dim]"))
+    table.add_row("Data Root", _render(settings.data_root, "[dim]Not set[/dim]"))
+    table.add_row("Log Level", _render(settings.log_level, "[dim]Not set[/dim]"))
+    table.add_row("Log Format", _render(settings.log_format, "[dim]Not set[/dim]"))
+    table.add_row("Log File", _render(settings.log_file, "[dim]None[/dim]"))
 
     console.print(table)
 

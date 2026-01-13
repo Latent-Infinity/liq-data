@@ -44,7 +44,7 @@ class TestLiqDataSettings:
         assert settings.binance_use_us is False
         # data_root is resolved to absolute path
         assert settings.data_root.is_absolute()
-        assert settings.data_root.name == "financial_data"
+        assert settings.data_root.name == "data"
         assert settings.log_level == "INFO"
         assert settings.log_format == "json"
         assert settings.log_file is None
@@ -76,6 +76,7 @@ class TestLiqDataSettings:
         assert settings.log_level == "DEBUG"
         assert settings.log_format == "console"
         assert settings.log_file == Path("/var/log/app.log")
+
 
 
 class TestGetSettings:

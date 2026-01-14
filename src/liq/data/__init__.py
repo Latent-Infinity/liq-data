@@ -15,6 +15,7 @@ from liq.data.exceptions import (
     ValidationError,
 )
 from liq.data.fetcher import DataFetcher
+from liq.data.forex import detect_gap_policy, normalize_hourly
 from liq.data.instruments import InstrumentSync
 from liq.data.protocols import AsyncDataProvider, DataProvider
 from liq.data.providers import BaseProvider, BinanceProvider, OandaProvider
@@ -50,6 +51,8 @@ __all__ = [
     "AsyncRetryPolicy",
     "IncrementalUpdater",
     "InstrumentSync",
+    "normalize_hourly",
+    "detect_gap_policy",
     "retry",
     "async_retry",
     # Exceptions

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 from liq.data.rate_limiter import RateLimiter
 
@@ -10,9 +10,8 @@ def test_rate_limiter_allows_without_policy() -> None:
 
 def test_rate_limiter_blocks_when_burst_exceeded(monkeypatch) -> None:
     limiter = RateLimiter(requests_per_minute=2, burst=2)
-    calls = []
 
-    fake_now = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+    fake_now = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 
     def fake_datetime_now(_tz):
         return fake_now

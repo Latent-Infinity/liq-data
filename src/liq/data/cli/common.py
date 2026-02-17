@@ -5,6 +5,7 @@ date parsing, provider factory, and Rich console setup.
 """
 
 from datetime import date, datetime
+from typing import cast
 
 import typer
 from rich.console import Console
@@ -27,7 +28,6 @@ from liq.data.settings import (
     create_oanda_provider,
     create_polygon_provider,
     create_tradestation_provider,
-    get_settings,
 )
 from liq.store import key_builder
 
@@ -60,17 +60,17 @@ def get_provider(provider_name: str) -> DataProvider:
     try:
         provider_lower = provider_name.lower()
         if provider_lower == "oanda":
-            return create_oanda_provider()
+            return cast(DataProvider, create_oanda_provider())
         elif provider_lower == "binance":
-            return create_binance_provider()
+            return cast(DataProvider, create_binance_provider())
         elif provider_lower == "tradestation":
-            return create_tradestation_provider()
+            return cast(DataProvider, create_tradestation_provider())
         elif provider_lower == "coinbase":
-            return create_coinbase_provider()
+            return cast(DataProvider, create_coinbase_provider())
         elif provider_lower == "polygon":
-            return create_polygon_provider()
+            return cast(DataProvider, create_polygon_provider())
         elif provider_lower == "alpaca":
-            return create_alpaca_provider()
+            return cast(DataProvider, create_alpaca_provider())
         else:
             console.print(f"[red]Unknown provider: {provider_name}[/red]")
             raise typer.Exit(1)

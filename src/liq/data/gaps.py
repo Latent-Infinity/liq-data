@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta, datetime, UTC
+from datetime import UTC, datetime, timedelta
 
 import polars as pl
-from liq.data.providers.binance_status import (
-    fetch_binance_announcements,
-    maintenance_windows_from_announcements,
-)
 
 
 @dataclass

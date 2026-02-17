@@ -1,6 +1,5 @@
 """Tests for liq.data.retry module."""
 
-import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 

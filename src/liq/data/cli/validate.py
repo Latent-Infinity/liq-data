@@ -12,7 +12,7 @@ import typer
 from rich.table import Table
 
 from liq.data.cli.common import TIMEFRAME_MINUTES, console
-from liq.data.settings import get_settings, get_store, get_storage_key
+from liq.data.settings import get_storage_key, get_store
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,4 @@
+from datetime import UTC
 from pathlib import Path
 
 import polars as pl
@@ -12,15 +13,15 @@ runner = CliRunner()
 
 def test_cli_qa_storage(tmp_path: Path) -> None:
     """QA should read data from liq-store-managed storage."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     store = ParquetStore(str(tmp_path))
     storage_key = "oanda/EUR_USD/bars/1m"
 
     df = pl.DataFrame({
         "timestamp": [
-            datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
-            datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+            datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
         ],
         "open": [1.0, 1.5],
         "high": [2.0, 2.5],

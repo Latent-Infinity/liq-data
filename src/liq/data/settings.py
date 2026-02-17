@@ -26,17 +26,18 @@ Example:
     print(settings.oanda_api_key)
 """
 
+import logging
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import polars as pl
-from liq.store import key_builder
-from liq.store.parquet import ParquetStore
-import logging
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from liq.store import key_builder
+from liq.store.parquet import ParquetStore
 
 
 def _find_data_root() -> Path:

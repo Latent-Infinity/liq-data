@@ -36,11 +36,11 @@ from liq.core import BatchResult, FetchResult
 from liq.data.exceptions import DataError, RateLimitError
 from liq.data.policies import POLICIES
 from liq.data.providers.base import BaseProvider
+from liq.data.qa import validate_ohlc
 from liq.data.rate_limiter import RateLimiter
 from liq.data.retry import retry
-from liq.store.protocols import TimeSeriesStore
 from liq.store import key_builder
-from liq.data.qa import validate_ohlc
+from liq.store.protocols import TimeSeriesStore
 
 logger = logging.getLogger(__name__)
 

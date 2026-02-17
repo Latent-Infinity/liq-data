@@ -453,8 +453,9 @@ class TestDetectInternalGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test detect_internal_gaps with contiguous data."""
-        import polars as pl
         from datetime import datetime
+
+        import polars as pl
 
         # Create DataFrame with no gaps (1-minute data)
         timestamps = [
@@ -485,8 +486,9 @@ class TestDetectInternalGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test detect_internal_gaps with a single gap."""
-        import polars as pl
         from datetime import datetime
+
+        import polars as pl
 
         # Create DataFrame with a gap (missing 10:2 and 10:3)
         timestamps = [
@@ -522,8 +524,9 @@ class TestDetectInternalGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test detect_internal_gaps with multiple gaps."""
-        import polars as pl
         from datetime import datetime
+
+        import polars as pl
 
         timestamps = [
             datetime(2024, 1, 15, 10, 0),
@@ -555,8 +558,9 @@ class TestDetectInternalGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test detect_internal_gaps with hourly data."""
-        import polars as pl
         from datetime import datetime
+
+        import polars as pl
 
         timestamps = [
             datetime(2024, 1, 15, 10, 0),
@@ -589,8 +593,9 @@ class TestDetectInternalGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test detect_internal_gaps ignores weekend gaps for forex."""
-        import polars as pl
         from datetime import datetime
+
+        import polars as pl
 
         # Friday to Monday data (weekend gap is expected for forex)
         timestamps = [
@@ -646,8 +651,9 @@ class TestDetectInternalGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test detect_internal_gaps with single bar."""
-        import polars as pl
         from datetime import datetime
+
+        import polars as pl
 
         df = pl.DataFrame({
             "timestamp": [datetime(2024, 1, 15, 10, 0)],
@@ -675,7 +681,6 @@ class TestBackfillGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test backfilling a single gap."""
-        import polars as pl
         from datetime import datetime
 
         mock_fetcher.fetch_and_store.return_value = 2
@@ -698,7 +703,6 @@ class TestBackfillGaps:
         self, mock_fetcher: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test backfilling multiple gaps."""
-        import polars as pl
         from datetime import datetime
 
         mock_fetcher.fetch_and_store.return_value = 3

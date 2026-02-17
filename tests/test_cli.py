@@ -1,18 +1,24 @@
 """Tests for liq.data.cli module."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
+import typer
 from typer.testing import CliRunner
-from liq.store import key_builder
 
 from liq.data.cli import app
-from liq.data.cli.common import create_fetch_progress, get_provider, parse_date, parse_source_spec, storage_key
+from liq.data.cli.common import (
+    create_fetch_progress,
+    get_provider,
+    parse_date,
+    parse_source_spec,
+    storage_key,
+)
 from liq.data.exceptions import AuthenticationError, ProviderError
-import typer
+from liq.store import key_builder
 from liq.store.parquet import ParquetStore
 
 runner = CliRunner()
@@ -70,9 +76,11 @@ class TestCommonHelpers:
             get_provider("unknown")
 
     def test_get_provider_config_error(self) -> None:
-        with patch("liq.data.cli.common.create_oanda_provider", side_effect=ValueError("bad config")):
-            with pytest.raises(typer.Exit):
-                get_provider("oanda")
+        with (
+            patch("liq.data.cli.common.create_oanda_provider", side_effect=ValueError("bad config")),
+            pytest.raises(typer.Exit),
+        ):
+            get_provider("oanda")
 
     def test_get_provider_supported_names(self) -> None:
         with patch("liq.data.cli.common.create_binance_provider", return_value=MagicMock()):
@@ -419,8 +427,8 @@ class TestFetchCommandEdgeCases:
     def test_fetch_dry_run_shows_preview(self) -> None:
         df = pl.DataFrame({
             "timestamp": [
-                datetime(2024, 1, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 2, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, tzinfo=UTC),
+                datetime(2024, 1, 2, tzinfo=UTC),
             ],
             "open": [1.0, 1.1],
             "high": [1.1, 1.2],
@@ -440,7 +448,7 @@ class TestFetchCommandEdgeCases:
 
     def test_backfill_runs_successfully(self) -> None:
         df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [1.0],
             "high": [1.1],
             "low": [0.9],
@@ -701,8 +709,8 @@ class TestFetchCommand:
         mock_provider = MagicMock()
         mock_df = pl.DataFrame({
             "timestamp": [
-                datetime(2024, 1, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 2, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, tzinfo=UTC),
+                datetime(2024, 1, 2, tzinfo=UTC),
             ],
             "open": [1.0, 1.1],
             "high": [1.1, 1.2],
@@ -735,7 +743,7 @@ class TestFetchCommand:
         """Test fetch with binance provider."""
         mock_provider = MagicMock()
         mock_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [42000.0],
             "high": [42500.0],
             "low": [41500.0],

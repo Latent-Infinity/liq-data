@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -9,9 +9,9 @@ def test_gap_classification_marks_gaps() -> None:
     df = pl.DataFrame(
         {
             "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 10, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 10, tzinfo=UTC),
             ],
             "open": [1, 1, 1],
             "high": [1, 1, 1],

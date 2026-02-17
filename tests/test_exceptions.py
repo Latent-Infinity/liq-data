@@ -6,10 +6,10 @@ from liq.data.exceptions import (
     AuthenticationError,
     ConfigurationError,
     DataError,
-    ProviderError,
-    RateLimitError,
     DataQualityError,
+    ProviderError,
     ProviderUnavailableError,
+    RateLimitError,
     SchemaValidationError,
     ValidationError,
 )

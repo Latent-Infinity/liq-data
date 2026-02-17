@@ -1,7 +1,7 @@
 """Authentication helpers for provider-specific flows."""
 
-from typing import Annotated
 import secrets
+from typing import Annotated
 
 import typer
 

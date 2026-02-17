@@ -66,9 +66,7 @@ def aggregate_bars(df: pl.DataFrame, timeframe: str, _method: AggregationMethod 
     minutes = _timeframe_to_minutes(timeframe)
     if minutes is None:
         raise ValueError(
-            "Unsupported timeframe: {tf}. Use standard m/h/d frames like 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d".format(
-                tf=timeframe
-            )
+            f"Unsupported timeframe: {timeframe}. Use standard m/h/d frames like 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d"
         )
     if minutes <= 1:
         return df

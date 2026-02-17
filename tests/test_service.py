@@ -1,18 +1,16 @@
 """Tests for DataService programmatic API."""
 
-from datetime import UTC, date, datetime, timedelta
+import logging
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import logging
 import polars as pl
 import pytest
-from liq.store.parquet import ParquetStore
-from liq.store import key_builder
 
 from liq.data.service import DataService
-from liq.data.service import _timeframe_to_minutes
-from liq.data.gaps import detect_gaps
+from liq.store import key_builder
+from liq.store.parquet import ParquetStore
 
 
 def write_test_data(tmp_path: Path, provider: str, symbol: str, timeframe: str, df: pl.DataFrame) -> None:

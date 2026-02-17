@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 
 from liq.data.qa import run_bar_qa
-from liq.data.settings import get_store, get_storage_key
+from liq.data.settings import get_storage_key, get_store
 
 app = typer.Typer(help="liq-data QA utilities")
 console = Console()

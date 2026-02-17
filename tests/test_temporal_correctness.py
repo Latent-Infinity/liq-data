@@ -5,14 +5,13 @@ Following TDD: Tests verify timestamp handling and data quality checks.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import polars as pl
-import pytest
 
-from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE, BaseProvider
-from liq.data.qa import QAResult, run_bar_qa
 from liq.data.gaps import GapPolicy, classify_gaps
+from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE, BaseProvider
+from liq.data.qa import run_bar_qa
 
 
 class TestTimestampOrdering:
@@ -28,9 +27,9 @@ class TestTimestampOrdering:
         # Even if input is out of order, after sorting it should be monotonic
         df = pl.DataFrame({
             "timestamp": [
-                datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 3, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
             ],
             "open": [100.0, 101.0, 102.0],
             "high": [105.0, 106.0, 107.0],
@@ -48,9 +47,9 @@ class TestTimestampOrdering:
         """QA should pass for correctly ordered timestamps."""
         df = pl.DataFrame({
             "timestamp": [
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 3, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
             ],
             "open": [100.0, 101.0, 102.0],
             "high": [105.0, 106.0, 107.0],
@@ -67,9 +66,9 @@ class TestTimestampOrdering:
         """QA should not flag duplicate timestamps as non-monotonic."""
         df = pl.DataFrame({
             "timestamp": [
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),  # Duplicate
-                datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),  # Duplicate
+                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
             ],
             "open": [100.0, 100.0, 102.0],
             "high": [105.0, 105.0, 107.0],
@@ -109,7 +108,7 @@ class TestTimezoneEnforcement:
         """BaseProvider should preserve existing UTC timezone."""
         bars = [
             {
-                "timestamp": datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+                "timestamp": datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
                 "open": 100.0,
                 "high": 105.0,
                 "low": 95.0,
@@ -136,7 +135,7 @@ class TestOHLCIntegrity:
     def test_qa_detects_high_less_than_open(self) -> None:
         """QA should detect when high < open."""
         df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [100.0],
             "high": [99.0],  # Invalid: high < open
             "low": [95.0],
@@ -151,7 +150,7 @@ class TestOHLCIntegrity:
     def test_qa_detects_high_less_than_close(self) -> None:
         """QA should detect when high < close."""
         df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [100.0],
             "high": [101.0],
             "low": [95.0],
@@ -166,7 +165,7 @@ class TestOHLCIntegrity:
     def test_qa_detects_low_greater_than_open(self) -> None:
         """QA should detect when low > open."""
         df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [100.0],
             "high": [105.0],
             "low": [101.0],  # Invalid: low > open
@@ -181,7 +180,7 @@ class TestOHLCIntegrity:
     def test_qa_detects_low_greater_than_close(self) -> None:
         """QA should detect when low > close."""
         df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [100.0],
             "high": [105.0],
             "low": [99.0],
@@ -196,7 +195,7 @@ class TestOHLCIntegrity:
     def test_qa_detects_high_less_than_low(self) -> None:
         """QA should detect when high < low."""
         df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [100.0],
             "high": [95.0],  # Invalid: high < low
             "low": [99.0],
@@ -211,7 +210,7 @@ class TestOHLCIntegrity:
     def test_qa_passes_valid_ohlc(self) -> None:
         """QA should pass for valid OHLC data."""
         df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=timezone.utc)],
+            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
             "open": [100.0],
             "high": [105.0],
             "low": [95.0],
@@ -231,10 +230,10 @@ class TestGapClassification:
         """Should detect gap when bar is missing."""
         df = pl.DataFrame({
             "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
                 # 0:02 is missing
-                datetime(2024, 1, 1, 0, 3, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
             ],
             "open": [100.0, 101.0, 102.0],
             "high": [105.0, 106.0, 107.0],
@@ -254,9 +253,9 @@ class TestGapClassification:
         """Should accept bars that arrive on schedule."""
         df = pl.DataFrame({
             "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
             ],
             "open": [100.0, 101.0, 102.0],
             "high": [105.0, 106.0, 107.0],
@@ -297,7 +296,7 @@ class TestDecimalPrecision:
         """Price columns should use Decimal for precision."""
         bars = [
             {
-                "timestamp": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "timestamp": datetime(2024, 1, 1, tzinfo=UTC),
                 "open": 0.00000001,  # 8 decimal places (crypto precision)
                 "high": 0.00000002,
                 "low": 0.00000001,
@@ -318,7 +317,7 @@ class TestDecimalPrecision:
         """Volume should use Decimal for precision."""
         bars = [
             {
-                "timestamp": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "timestamp": datetime(2024, 1, 1, tzinfo=UTC),
                 "open": 100.0,
                 "high": 105.0,
                 "low": 95.0,

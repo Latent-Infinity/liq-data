@@ -1,10 +1,9 @@
 """Tests for aggregation helpers."""
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import polars as pl
 import pytest
-
 from polars.testing import assert_frame_equal
 
 from liq.data.aggregation import aggregate_bars

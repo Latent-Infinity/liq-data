@@ -11,7 +11,6 @@ from liq.data.exceptions import (
     AuthenticationError,
     ProviderError,
     RateLimitError,
-    ValidationError,
 )
 from liq.data.providers.tradestation import TradeStationProvider
 

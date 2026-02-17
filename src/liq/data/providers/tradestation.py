@@ -13,8 +13,8 @@ Features:
 - Automatic pagination for large date ranges
 """
 
-from datetime import UTC, date, datetime, timedelta
 import logging
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlencode
 

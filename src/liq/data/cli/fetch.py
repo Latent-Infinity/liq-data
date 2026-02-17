@@ -6,8 +6,8 @@ from typing import Annotated
 import typer
 
 from liq.data.cli.common import console, parse_date
+from liq.data.exceptions import ConfigurationError, ProviderError
 from liq.data.service import DataService
-from liq.data.exceptions import ProviderError, ConfigurationError
 
 app = typer.Typer(help="Commands for fetching and updating market data")
 

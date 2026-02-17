@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-from liq.data.exceptions import ProviderError, RateLimitError, DataQualityError
+from liq.data.exceptions import DataQualityError, ProviderError, RateLimitError
 from liq.data.fetcher import DataFetcher
 from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE
 from liq.store import key_builder

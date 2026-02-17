@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, timedelta
+from datetime import timedelta
 from typing import Any
 
 import polars as pl
@@ -23,7 +23,7 @@ def detect_gap_policy(
     max_gap = max(durations) if durations else 0
     oversized = [
         (start, end)
-        for (start, end), minutes in zip(gaps, durations)
+        for (start, end), minutes in zip(gaps, durations, strict=False)
         if minutes > max_fill_minutes
     ]
     return {

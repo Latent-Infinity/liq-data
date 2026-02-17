@@ -12,7 +12,7 @@ import typer
 from rich.table import Table
 
 from liq.data.cli.common import console, get_provider
-from liq.data.settings import get_settings, get_store, get_storage_key
+from liq.data.settings import get_settings, get_storage_key, get_store
 
 if TYPE_CHECKING:
     from liq.store.parquet import ParquetStore
@@ -117,7 +117,7 @@ def show_data_info(
     Without arguments, lists all available data.
     With provider/symbol/timeframe, shows detailed info for that data.
     """
-    settings = get_settings()
+    get_settings()
 
     # If specific symbol requested, show detailed info
     if provider and symbol:

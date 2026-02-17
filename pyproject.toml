@@ -55,13 +55,18 @@ dev = [
     "respx>=0.22",
     "hypothesis>=6.120",
     "ruff>=0.14",
-    "mypy>=1.13",
+    "ty>=0.0.1",
     "pre-commit>=4.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/firestrand/liq-data"
 Repository = "https://github.com/firestrand/liq-data"
+
+[tool.uv]
+[tool.uv.sources]
+liq-core = { path = "../liq-core", editable = true }
+liq-store = { path = "../liq-store", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/liq"]
@@ -85,17 +90,10 @@ exclude_lines = [
     "pass",
 ]
 
-[tool.mypy]
-python_version = "3.11"
-strict = true
-warn_return_any = true
-warn_unused_ignores = true
-disallow_untyped_defs = true
-plugins = ["pydantic.mypy"]
+[tool.ty.environment]
+extra-paths = ["./src"]
 
-[[tool.mypy.overrides]]
-module = ["polars.*", "httpx.*", "tenacity.*"]
-ignore_missing_imports = true
+[tool.ty.rules]
 
 [tool.ruff]
 line-length = 100

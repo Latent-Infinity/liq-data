@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -10,8 +10,8 @@ def test_qa_detects_issues() -> None:
     df = pl.DataFrame(
         {
             "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc),
-                datetime(2024, 1, 1, 0, 1, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
             ],
             "open": [100.0, 110.0],
             "high": [99.0, 111.0],  # first row high < open -> inconsistency

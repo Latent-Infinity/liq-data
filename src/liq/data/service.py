@@ -31,18 +31,16 @@ Example:
 
 from __future__ import annotations
 
-from datetime import date, timedelta, datetime, UTC
+import logging
 from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import logging
 import polars as pl
-from liq.store.parquet import ParquetStore
-from liq.store import key_builder
-from liq.data.aggregation import aggregate_bars
 
-from liq.data.gaps import classify_gaps, detect_gaps
+from liq.data.aggregation import aggregate_bars
+from liq.data.gaps import detect_gaps
 from liq.data.qa import validate_ohlc
 from liq.data.settings import (
     LiqDataSettings,
@@ -54,6 +52,8 @@ from liq.data.settings import (
     create_tradestation_provider,
     get_settings,
 )
+from liq.store import key_builder
+from liq.store.parquet import ParquetStore
 
 if TYPE_CHECKING:
     from liq.data.protocols import DataProvider

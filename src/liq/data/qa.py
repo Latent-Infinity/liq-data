@@ -89,7 +89,7 @@ def _check_spikes(df: pl.DataFrame, threshold: float = 0.2) -> list[str]:
     spikes = df.with_columns(((pl.col("close") - pl.col("close").shift(1)).abs() / pl.col("close").shift(1)).alias("pct"))
     if spikes.filter(pl.col("pct") > threshold).is_empty():
         return []
-    return ["Price spike warning: move > {:.0%}".format(threshold)]
+    return [f"Price spike warning: move > {threshold:.0%}"]
 
 
 def _check_stale(df: pl.DataFrame, stale_minutes: int = 60) -> list[str]:

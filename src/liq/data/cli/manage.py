@@ -12,8 +12,8 @@ import typer
 from rich.table import Table
 
 from liq.data.cli.common import console, parse_source_spec
-from liq.data.settings import get_settings, get_store, get_storage_key
 from liq.data.service import DataService
+from liq.data.settings import get_storage_key, get_store
 
 app = typer.Typer()
 

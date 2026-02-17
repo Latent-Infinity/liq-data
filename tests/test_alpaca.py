@@ -1,6 +1,6 @@
 """Tests for liq.data.providers.alpaca module."""
 
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any
 
 import httpx

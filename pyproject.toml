@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "liq-data"
-version = "0.1.1"
+version = "0.1.2"
 description = "Data providers and ingestion for the LIQ Stack"
 readme = "README.md"
 license = "MIT"
@@ -32,8 +32,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "liq-core>=0.1.0",
-    "liq-store>=0.1.0",
+    "liq-core>=0.1.1",
+    "liq-store>=0.1.1",
     "polars>=1.20",
     "httpx>=0.28",
     "pydantic>=2.10",

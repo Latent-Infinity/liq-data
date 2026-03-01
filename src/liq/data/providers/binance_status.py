@@ -19,9 +19,7 @@ def fetch_binance_system_status() -> dict[str, Any]:
 def fetch_binance_announcements(limit: int = 50) -> list[dict[str, Any]]:
     """Fetch recent Binance system announcements (maintenance/updates)."""
     with httpx.Client(timeout=10, follow_redirects=True) as client:
-        resp = client.get(
-            "https://status.binance.com/status/spot/history", params={"limit": limit}
-        )
+        resp = client.get("https://status.binance.com/status/spot/history", params={"limit": limit})
         resp.raise_for_status()
         # response may be html if not supported; guard
         try:
@@ -31,7 +29,9 @@ def fetch_binance_announcements(limit: int = 50) -> list[dict[str, Any]]:
         return data.get("histories", [])
 
 
-def maintenance_windows_from_announcements(announcements: list[dict[str, Any]]) -> list[tuple[datetime, datetime, str]]:
+def maintenance_windows_from_announcements(
+    announcements: list[dict[str, Any]],
+) -> list[tuple[datetime, datetime, str]]:
     """Extract maintenance windows from status histories."""
     windows: list[tuple[datetime, datetime, str]] = []
     for item in announcements:

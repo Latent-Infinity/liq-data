@@ -176,9 +176,7 @@ class OandaProvider(BaseProvider):
             while current_start < end_dt:
                 current_end = min(current_start + chunk_delta, end_dt)
 
-                chunk_bars = self._fetch_bars_chunk(
-                    symbol, current_start, current_end, granularity
-                )
+                chunk_bars = self._fetch_bars_chunk(symbol, current_start, current_end, granularity)
                 all_bars.extend(chunk_bars)
 
                 # Move to next chunk
@@ -247,14 +245,16 @@ class OandaProvider(BaseProvider):
                 if field not in mid:
                     raise ValidationError(f"Missing OHLC field '{field}' at {timestamp_str}")
 
-            bars.append({
-                "timestamp": timestamp,
-                "open": float(mid["o"]),
-                "high": float(mid["h"]),
-                "low": float(mid["l"]),
-                "close": float(mid["c"]),
-                "volume": float(candle.get("volume", 0)),
-            })
+            bars.append(
+                {
+                    "timestamp": timestamp,
+                    "open": float(mid["o"]),
+                    "high": float(mid["h"]),
+                    "low": float(mid["l"]),
+                    "close": float(mid["c"]),
+                    "volume": float(candle.get("volume", 0)),
+                }
+            )
 
         return bars
 
@@ -288,12 +288,14 @@ class OandaProvider(BaseProvider):
             instruments = []
 
             for inst in data.get("instruments", []):
-                instruments.append({
-                    "symbol": inst["name"],
-                    "name": inst.get("displayName", inst["name"]),
-                    "asset_class": "forex",
-                    "type": inst.get("type", "CURRENCY"),
-                })
+                instruments.append(
+                    {
+                        "symbol": inst["name"],
+                        "name": inst.get("displayName", inst["name"]),
+                        "asset_class": "forex",
+                        "type": inst.get("type", "CURRENCY"),
+                    }
+                )
 
             return pl.DataFrame(instruments)
 

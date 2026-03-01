@@ -35,9 +35,7 @@ def run_bar_qa(df: pl.DataFrame) -> QAResult:
     df = df.sort("timestamp")
     total = len(df)
     missing_ratio = 0.0  # placeholder when we don't know expected calendar
-    zero_volume_ratio = (
-        df.filter(pl.col("volume") == 0).height / total if total else 0.0
-    )
+    zero_volume_ratio = df.filter(pl.col("volume") == 0).height / total if total else 0.0
     ohlc_bad = df.filter(
         (pl.col("high") < pl.col("open"))
         | (pl.col("high") < pl.col("close"))
@@ -52,9 +50,7 @@ def run_bar_qa(df: pl.DataFrame) -> QAResult:
     )
     negative_volume = df.filter(pl.col("volume") < 0).height
     # Count non-monotonic timestamps using vectorized Polars expression
-    non_monotonic_ts = df.select(
-        (pl.col("timestamp") < pl.col("timestamp").shift(1)).sum()
-    ).item()
+    non_monotonic_ts = df.select((pl.col("timestamp") < pl.col("timestamp").shift(1)).sum()).item()
     return QAResult(
         missing_ratio=missing_ratio,
         zero_volume_ratio=zero_volume_ratio,
@@ -74,9 +70,13 @@ def _check_ohlc_constraints(df: pl.DataFrame) -> list[str]:
     errs: list[str] = []
     if not df.filter(pl.col("high") < pl.col("low")).is_empty():
         errs.append("Found rows where high < low")
-    if not df.filter((pl.col("high") < pl.col("open")) | (pl.col("high") < pl.col("close"))).is_empty():
+    if not df.filter(
+        (pl.col("high") < pl.col("open")) | (pl.col("high") < pl.col("close"))
+    ).is_empty():
         errs.append("Found rows where high < open/close")
-    if not df.filter((pl.col("low") > pl.col("open")) | (pl.col("low") > pl.col("close"))).is_empty():
+    if not df.filter(
+        (pl.col("low") > pl.col("open")) | (pl.col("low") > pl.col("close"))
+    ).is_empty():
         errs.append("Found rows where low > open/close")
     if not df.filter(pl.col("volume") < 0).is_empty():
         errs.append("Found rows with negative volume")
@@ -86,7 +86,9 @@ def _check_ohlc_constraints(df: pl.DataFrame) -> list[str]:
 def _check_spikes(df: pl.DataFrame, threshold: float = 0.2) -> list[str]:
     if "close" not in df.columns:
         return []
-    spikes = df.with_columns(((pl.col("close") - pl.col("close").shift(1)).abs() / pl.col("close").shift(1)).alias("pct"))
+    spikes = df.with_columns(
+        ((pl.col("close") - pl.col("close").shift(1)).abs() / pl.col("close").shift(1)).alias("pct")
+    )
     if spikes.filter(pl.col("pct") > threshold).is_empty():
         return []
     return [f"Price spike warning: move > {threshold:.0%}"]
@@ -99,7 +101,7 @@ def _check_stale(df: pl.DataFrame, stale_minutes: int = 60) -> list[str]:
     if isinstance(last, datetime) and last.tzinfo:
         delta = datetime.now(tz=UTC) - last
         if delta.total_seconds() / 60 > stale_minutes:
-            return [f"Data stale: last timestamp {delta.total_seconds()/60:.1f} minutes ago"]
+            return [f"Data stale: last timestamp {delta.total_seconds() / 60:.1f} minutes ago"]
     return []
 
 

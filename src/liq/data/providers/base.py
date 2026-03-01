@@ -140,8 +140,7 @@ class BaseProvider(ABC):
         """
         if timeframe not in self.supported_timeframes:
             raise ProviderError(
-                f"Unsupported timeframe: {timeframe}. "
-                f"Supported: {self.supported_timeframes}"
+                f"Unsupported timeframe: {timeframe}. Supported: {self.supported_timeframes}"
             )
 
     @staticmethod

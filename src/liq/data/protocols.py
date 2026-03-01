@@ -1,6 +1,6 @@
-"""Protocols for data providers in the LIQ Stack.
+"""Protocols for data adapters in the LIQ Stack.
 
-This module defines the DataProvider protocol that all data providers
+This module defines the MarketDataProvider protocol that all data providers
 must implement to be usable with the LIQ data pipeline.
 """
 
@@ -11,10 +11,10 @@ import polars as pl
 
 
 @runtime_checkable
-class DataProvider(Protocol):
-    """Protocol for market data providers.
+class MarketDataProvider(Protocol):
+    """Protocol for market data adapters.
 
-    All data providers must implement this protocol to be compatible
+    All data adapters must implement this protocol to be compatible
     with the LIQ data pipeline.
 
     Example:
@@ -117,10 +117,10 @@ class DataProvider(Protocol):
 
 
 @runtime_checkable
-class AsyncDataProvider(Protocol):
-    """Protocol for async market data providers.
+class AsyncMarketDataProvider(Protocol):
+    """Protocol for async market data adapters.
 
-    Same as DataProvider but with async methods for concurrent fetching.
+    Same as MarketDataProvider but with async methods for concurrent fetching.
     """
 
     @property

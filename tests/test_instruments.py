@@ -26,20 +26,20 @@ def mock_store() -> MagicMock:
 @pytest.fixture
 def sample_instruments_df() -> pl.DataFrame:
     """Create a sample instruments DataFrame."""
-    return pl.DataFrame({
-        "symbol": ["EUR_USD", "GBP_USD", "USD_JPY"],
-        "name": ["Euro/US Dollar", "British Pound/US Dollar", "US Dollar/Japanese Yen"],
-        "asset_class": ["forex", "forex", "forex"],
-        "type": ["CURRENCY", "CURRENCY", "CURRENCY"],
-    })
+    return pl.DataFrame(
+        {
+            "symbol": ["EUR_USD", "GBP_USD", "USD_JPY"],
+            "name": ["Euro/US Dollar", "British Pound/US Dollar", "US Dollar/Japanese Yen"],
+            "asset_class": ["forex", "forex", "forex"],
+            "type": ["CURRENCY", "CURRENCY", "CURRENCY"],
+        }
+    )
 
 
 class TestInstrumentSyncCreation:
     """Tests for InstrumentSync instantiation."""
 
-    def test_create_sync(
-        self, mock_provider: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_create_sync(self, mock_provider: MagicMock, mock_store: MagicMock) -> None:
         """Test InstrumentSync creation."""
         sync = InstrumentSync(provider=mock_provider, store=mock_store)
 
@@ -68,9 +68,7 @@ class TestInstrumentSyncFetchInstruments:
         assert "provider" in result.columns
         mock_provider.list_instruments.assert_called_once_with("forex")
 
-    def test_fetch_instruments_empty(
-        self, mock_provider: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_fetch_instruments_empty(self, mock_provider: MagicMock, mock_store: MagicMock) -> None:
         """Test fetch with empty result."""
         mock_provider.list_instruments.return_value = pl.DataFrame(
             schema={
@@ -105,9 +103,11 @@ class TestInstrumentSyncFetchInstruments:
         self, mock_provider: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test name column is generated from symbol if not present."""
-        df = pl.DataFrame({
-            "symbol": ["EUR_USD", "GBP_USD"],
-        })
+        df = pl.DataFrame(
+            {
+                "symbol": ["EUR_USD", "GBP_USD"],
+            }
+        )
         mock_provider.list_instruments.return_value = df
 
         sync = InstrumentSync(provider=mock_provider, store=mock_store)
@@ -143,13 +143,9 @@ class TestInstrumentSyncSyncInstruments:
         assert call_args[0][0] == "instruments/test_provider"
         assert call_args[1]["mode"] == "overwrite"
 
-    def test_sync_instruments_empty(
-        self, mock_provider: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_sync_instruments_empty(self, mock_provider: MagicMock, mock_store: MagicMock) -> None:
         """Test sync with empty instruments."""
-        mock_provider.list_instruments.return_value = pl.DataFrame(
-            schema={"symbol": pl.Utf8}
-        )
+        mock_provider.list_instruments.return_value = pl.DataFrame(schema={"symbol": pl.Utf8})
 
         sync = InstrumentSync(provider=mock_provider, store=mock_store)
 
@@ -217,12 +213,14 @@ class TestInstrumentSyncNormalization:
         self, mock_provider: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test normalization preserves extra columns."""
-        df = pl.DataFrame({
-            "symbol": ["EUR_USD"],
-            "name": ["Euro/USD"],
-            "extra_field": ["value"],
-            "another_field": [123],
-        })
+        df = pl.DataFrame(
+            {
+                "symbol": ["EUR_USD"],
+                "name": ["Euro/USD"],
+                "extra_field": ["value"],
+                "another_field": [123],
+            }
+        )
         mock_provider.list_instruments.return_value = df
 
         sync = InstrumentSync(provider=mock_provider, store=mock_store)
@@ -243,9 +241,11 @@ class TestInstrumentSyncNormalization:
         self, mock_provider: MagicMock, mock_store: MagicMock
     ) -> None:
         """Test normalization handles missing optional columns."""
-        df = pl.DataFrame({
-            "symbol": ["EUR_USD"],
-        })
+        df = pl.DataFrame(
+            {
+                "symbol": ["EUR_USD"],
+            }
+        )
         mock_provider.list_instruments.return_value = df
 
         sync = InstrumentSync(provider=mock_provider, store=mock_store)

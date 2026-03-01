@@ -189,11 +189,7 @@ class AsyncDataFetcher:
         """
         tasks = []
         for symbol in symbols:
-            tasks.append(
-                asyncio.create_task(
-                    self._fetch_symbol(symbol, start, end, timeframe)
-                )
-            )
+            tasks.append(asyncio.create_task(self._fetch_symbol(symbol, start, end, timeframe)))
 
         results: list[FetchResult] = await asyncio.gather(*tasks)
 

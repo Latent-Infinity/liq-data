@@ -63,16 +63,12 @@ class TestOandaProviderCreation:
     """Tests for OandaProvider instantiation."""
 
     def test_create_practice_provider(self) -> None:
-        provider = OandaProvider(
-            api_key="key", account_id="account", environment="practice"
-        )
+        provider = OandaProvider(api_key="key", account_id="account", environment="practice")
         assert provider.name == "oanda"
         assert provider._base_url == OandaProvider.PRACTICE_URL
 
     def test_create_live_provider(self) -> None:
-        provider = OandaProvider(
-            api_key="key", account_id="account", environment="live"
-        )
+        provider = OandaProvider(api_key="key", account_id="account", environment="live")
         assert provider._base_url == OandaProvider.LIVE_URL
 
     def test_supported_timeframes(self, oanda_provider: OandaProvider) -> None:
@@ -101,9 +97,9 @@ class TestOandaProviderFetchBars:
                 return httpx.Response(200, json=mock_candles_response)
             return httpx.Response(200, json={"candles": []})
 
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles"
-        ).mock(side_effect=mock_response)
+        respx.get("https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles").mock(
+            side_effect=mock_response
+        )
 
         result = oanda_provider.fetch_bars(
             "EUR_USD", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
@@ -117,9 +113,9 @@ class TestOandaProviderFetchBars:
 
     @respx.mock
     def test_fetch_bars_empty_response(self, oanda_provider: OandaProvider) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles"
-        ).mock(return_value=httpx.Response(200, json={"candles": []}))
+        respx.get("https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles").mock(
+            return_value=httpx.Response(200, json={"candles": []})
+        )
 
         result = oanda_provider.fetch_bars(
             "EUR_USD", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
@@ -130,9 +126,9 @@ class TestOandaProviderFetchBars:
 
     @respx.mock
     def test_fetch_bars_authentication_error(self, oanda_provider: OandaProvider) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles"
-        ).mock(return_value=httpx.Response(401, json={"error": "Unauthorized"}))
+        respx.get("https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles").mock(
+            return_value=httpx.Response(401, json={"error": "Unauthorized"})
+        )
 
         with pytest.raises(AuthenticationError, match="Invalid OANDA API credentials"):
             oanda_provider.fetch_bars(
@@ -141,9 +137,9 @@ class TestOandaProviderFetchBars:
 
     @respx.mock
     def test_fetch_bars_rate_limit_error(self, oanda_provider: OandaProvider) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles"
-        ).mock(return_value=httpx.Response(429, json={"error": "Rate limit"}))
+        respx.get("https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles").mock(
+            return_value=httpx.Response(429, json={"error": "Rate limit"})
+        )
 
         with pytest.raises(RateLimitError, match="rate limit exceeded"):
             oanda_provider.fetch_bars(
@@ -157,9 +153,7 @@ class TestOandaProviderFetchBars:
             )
 
     @respx.mock
-    def test_fetch_bars_skips_incomplete_candles(
-        self, oanda_provider: OandaProvider
-    ) -> None:
+    def test_fetch_bars_skips_incomplete_candles(self, oanda_provider: OandaProvider) -> None:
         response = {
             "candles": [
                 {
@@ -185,9 +179,9 @@ class TestOandaProviderFetchBars:
                 return httpx.Response(200, json=response)
             return httpx.Response(200, json={"candles": []})
 
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles"
-        ).mock(side_effect=mock_response)
+        respx.get("https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles").mock(
+            side_effect=mock_response
+        )
 
         result = oanda_provider.fetch_bars(
             "EUR_USD", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
@@ -205,9 +199,9 @@ class TestOandaProviderListInstruments:
         oanda_provider: OandaProvider,
         mock_instruments_response: dict,
     ) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments"
-        ).mock(return_value=httpx.Response(200, json=mock_instruments_response))
+        respx.get("https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments").mock(
+            return_value=httpx.Response(200, json=mock_instruments_response)
+        )
 
         result = oanda_provider.list_instruments()
 
@@ -222,25 +216,23 @@ class TestOandaProviderListInstruments:
         oanda_provider: OandaProvider,
         mock_instruments_response: dict,
     ) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments"
-        ).mock(return_value=httpx.Response(200, json=mock_instruments_response))
+        respx.get("https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments").mock(
+            return_value=httpx.Response(200, json=mock_instruments_response)
+        )
 
         result = oanda_provider.list_instruments(asset_class="forex")
 
         assert len(result) == 3
 
-    def test_list_instruments_invalid_asset_class(
-        self, oanda_provider: OandaProvider
-    ) -> None:
+    def test_list_instruments_invalid_asset_class(self, oanda_provider: OandaProvider) -> None:
         with pytest.raises(ProviderError, match="OANDA only supports forex"):
             oanda_provider.list_instruments(asset_class="crypto")
 
     @respx.mock
     def test_list_instruments_auth_error(self, oanda_provider: OandaProvider) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments"
-        ).mock(return_value=httpx.Response(401, json={"error": "Unauthorized"}))
+        respx.get("https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments").mock(
+            return_value=httpx.Response(401, json={"error": "Unauthorized"})
+        )
 
         with pytest.raises(AuthenticationError):
             oanda_provider.list_instruments()
@@ -251,27 +243,25 @@ class TestOandaProviderValidateCredentials:
 
     @respx.mock
     def test_validate_credentials_success(self, oanda_provider: OandaProvider) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id"
-        ).mock(return_value=httpx.Response(200, json={"account": {}}))
+        respx.get("https://api-fxpractice.oanda.com/v3/accounts/test_account_id").mock(
+            return_value=httpx.Response(200, json={"account": {}})
+        )
 
         assert oanda_provider.validate_credentials() is True
 
     @respx.mock
     def test_validate_credentials_failure(self, oanda_provider: OandaProvider) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id"
-        ).mock(return_value=httpx.Response(401, json={"error": "Unauthorized"}))
+        respx.get("https://api-fxpractice.oanda.com/v3/accounts/test_account_id").mock(
+            return_value=httpx.Response(401, json={"error": "Unauthorized"})
+        )
 
         assert oanda_provider.validate_credentials() is False
 
     @respx.mock
-    def test_validate_credentials_network_error(
-        self, oanda_provider: OandaProvider
-    ) -> None:
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id"
-        ).mock(side_effect=httpx.ConnectError("Connection failed"))
+    def test_validate_credentials_network_error(self, oanda_provider: OandaProvider) -> None:
+        respx.get("https://api-fxpractice.oanda.com/v3/accounts/test_account_id").mock(
+            side_effect=httpx.ConnectError("Connection failed")
+        )
 
         assert oanda_provider.validate_credentials() is False
 
@@ -280,9 +270,7 @@ class TestOandaProviderDataValidation:
     """Tests for OANDA data validation."""
 
     @respx.mock
-    def test_missing_timestamp_raises_validation_error(
-        self, oanda_provider: OandaProvider
-    ) -> None:
+    def test_missing_timestamp_raises_validation_error(self, oanda_provider: OandaProvider) -> None:
         response = {
             "candles": [
                 {
@@ -302,9 +290,9 @@ class TestOandaProviderDataValidation:
                 return httpx.Response(200, json=response)
             return httpx.Response(200, json={"candles": []})
 
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles"
-        ).mock(side_effect=mock_response)
+        respx.get("https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles").mock(
+            side_effect=mock_response
+        )
 
         with pytest.raises(ValidationError, match="Missing timestamp"):
             oanda_provider.fetch_bars(
@@ -334,9 +322,9 @@ class TestOandaProviderDataValidation:
                 return httpx.Response(200, json=response)
             return httpx.Response(200, json={"candles": []})
 
-        respx.get(
-            "https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles"
-        ).mock(side_effect=mock_response)
+        respx.get("https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles").mock(
+            side_effect=mock_response
+        )
 
         with pytest.raises(ValidationError, match="Missing mid price"):
             oanda_provider.fetch_bars(

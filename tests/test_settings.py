@@ -78,7 +78,6 @@ class TestLiqDataSettings:
         assert settings.log_file == Path("/var/log/app.log")
 
 
-
 class TestGetSettings:
     """Tests for get_settings function."""
 
@@ -361,14 +360,16 @@ class TestLoadSymbolData:
         # Create test data using ParquetStore
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         # Clear cache and mock settings

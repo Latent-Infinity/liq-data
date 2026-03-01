@@ -245,9 +245,7 @@ class TradeStationProvider(BaseProvider):
                 settings = get_settings()
                 if settings.tradestation_persist_refresh_token:
                     persist_env_value("TRADESTATION_REFRESH_TOKEN", new_refresh)
-                    logger.info(
-                        "TradeStation refresh token rotated and persisted to .env."
-                    )
+                    logger.info("TradeStation refresh token rotated and persisted to .env.")
                 else:
                     logger.warning(
                         "TradeStation refresh token rotated; update TRADESTATION_REFRESH_TOKEN "
@@ -298,9 +296,7 @@ class TradeStationProvider(BaseProvider):
             raise RateLimitError("TradeStation rate limit exceeded")
 
         if response.status_code != 200:
-            raise ProviderError(
-                f"TradeStation API error: {response.status_code} - {response.text}"
-            )
+            raise ProviderError(f"TradeStation API error: {response.status_code} - {response.text}")
 
         return cast(dict[str, Any], response.json())
 
@@ -376,19 +372,20 @@ class TradeStationProvider(BaseProvider):
                 if ts < start_dt:
                     continue
 
-                all_bars.append({
-                    "timestamp": ts,
-                    "open": float(bar["Open"]),
-                    "high": float(bar["High"]),
-                    "low": float(bar["Low"]),
-                    "close": float(bar["Close"]),
-                    "volume": float(bar.get("TotalVolume", 0)),
-                })
+                all_bars.append(
+                    {
+                        "timestamp": ts,
+                        "open": float(bar["Open"]),
+                        "high": float(bar["High"]),
+                        "low": float(bar["Low"]),
+                        "close": float(bar["Close"]),
+                        "volume": float(bar.get("TotalVolume", 0)),
+                    }
+                )
 
             # Find earliest timestamp for next pagination
             earliest = min(
-                datetime.fromisoformat(b["TimeStamp"].replace("Z", "+00:00"))
-                for b in bars
+                datetime.fromisoformat(b["TimeStamp"].replace("Z", "+00:00")) for b in bars
             )
 
             # If we've gotten all the data we need, stop
@@ -437,13 +434,15 @@ class TradeStationProvider(BaseProvider):
                     if asset_class == "futures" and asset_type != "FUTURE":
                         continue
 
-                    all_symbols.append({
-                        "symbol": sym.get("Symbol", ""),
-                        "name": sym.get("Description", ""),
-                        "asset_class": asset_type,
-                        "exchange": sym.get("Exchange", ""),
-                        "type": asset_type,
-                    })
+                    all_symbols.append(
+                        {
+                            "symbol": sym.get("Symbol", ""),
+                            "name": sym.get("Description", ""),
+                            "asset_class": asset_type,
+                            "exchange": sym.get("Exchange", ""),
+                            "type": asset_type,
+                        }
+                    )
             except ProviderError:
                 # Continue if search fails
                 continue

@@ -33,9 +33,7 @@ def _load_data(source: str) -> pl.DataFrame:
     elif len(parts) == 3:
         provider, symbol, timeframe = parts
     else:
-        raise ValueError(
-            "source must be a storage key of the form provider/symbol/bars/timeframe"
-        )
+        raise ValueError("source must be a storage key of the form provider/symbol/bars/timeframe")
     store = get_store()
     storage_key = get_storage_key(provider, symbol, timeframe)
 
@@ -47,7 +45,12 @@ def _load_data(source: str) -> pl.DataFrame:
 
 @app.command("qa")
 def qa(
-    source: Annotated[str, typer.Argument(help="Storage key: provider/symbol/bars/timeframe (e.g., oanda/EUR_USD/bars/1m)")],
+    source: Annotated[
+        str,
+        typer.Argument(
+            help="Storage key: provider/symbol/bars/timeframe (e.g., oanda/EUR_USD/bars/1m)"
+        ),
+    ],
 ) -> None:
     """Run bar-level QA checks and print summary via liq-store."""
     df = _load_data(source)

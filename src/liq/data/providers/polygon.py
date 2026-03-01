@@ -135,17 +135,13 @@ class PolygonProvider(BaseProvider):
             raise ProviderError(f"Polygon API request failed: {e}") from e
 
         if response.status_code in (401, 403):
-            raise AuthenticationError(
-                f"Polygon authentication failed: {response.text}"
-            )
+            raise AuthenticationError(f"Polygon authentication failed: {response.text}")
 
         if response.status_code == 429:
             raise RateLimitError("Polygon rate limit exceeded")
 
         if response.status_code != 200:
-            raise ProviderError(
-                f"Polygon API error: {response.status_code} - {response.text}"
-            )
+            raise ProviderError(f"Polygon API error: {response.status_code} - {response.text}")
 
         return response.json()
 
@@ -196,7 +192,9 @@ class PolygonProvider(BaseProvider):
         end_str = end.isoformat()
 
         # Build endpoint
-        endpoint = f"/v2/aggs/ticker/{api_symbol}/range/{multiplier}/{timespan}/{start_str}/{end_str}"
+        endpoint = (
+            f"/v2/aggs/ticker/{api_symbol}/range/{multiplier}/{timespan}/{start_str}/{end_str}"
+        )
 
         params: dict[str, Any] = {
             "adjusted": "true",
@@ -218,9 +216,7 @@ class PolygonProvider(BaseProvider):
                 try:
                     response = client.get(next_url, headers=headers)
                     if response.status_code in (401, 403):
-                        raise AuthenticationError(
-                            f"Polygon authentication failed: {response.text}"
-                        )
+                        raise AuthenticationError(f"Polygon authentication failed: {response.text}")
                     if response.status_code == 429:
                         raise RateLimitError("Polygon rate limit exceeded")
                     if response.status_code != 200:
@@ -240,14 +236,16 @@ class PolygonProvider(BaseProvider):
             # Parse results
             for bar in results:
                 ts = datetime.fromtimestamp(bar["t"] / 1000, tz=UTC)
-                all_bars.append({
-                    "timestamp": ts,
-                    "open": float(bar["o"]),
-                    "high": float(bar["h"]),
-                    "low": float(bar["l"]),
-                    "close": float(bar["c"]),
-                    "volume": float(bar["v"]),
-                })
+                all_bars.append(
+                    {
+                        "timestamp": ts,
+                        "open": float(bar["o"]),
+                        "high": float(bar["h"]),
+                        "low": float(bar["l"]),
+                        "close": float(bar["c"]),
+                        "volume": float(bar["v"]),
+                    }
+                )
 
             # Check for pagination
             next_url = data.get("next_url")
@@ -291,14 +289,16 @@ class PolygonProvider(BaseProvider):
             if not ticker.get("active", True):
                 continue
 
-            all_tickers.append({
-                "symbol": ticker.get("ticker", ""),
-                "name": ticker.get("name", ""),
-                "asset_class": ticker.get("market", "stocks"),
-                "exchange": ticker.get("primary_exchange", ""),
-                "type": ticker.get("type", ""),
-                "currency": ticker.get("currency_name", "usd"),
-            })
+            all_tickers.append(
+                {
+                    "symbol": ticker.get("ticker", ""),
+                    "name": ticker.get("name", ""),
+                    "asset_class": ticker.get("market", "stocks"),
+                    "exchange": ticker.get("primary_exchange", ""),
+                    "type": ticker.get("type", ""),
+                    "currency": ticker.get("currency_name", "usd"),
+                }
+            )
 
         if not all_tickers:
             return pl.DataFrame(

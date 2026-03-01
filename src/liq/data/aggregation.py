@@ -51,7 +51,9 @@ def _timeframe_to_minutes(tf: str) -> int | None:
     return None  # pragma: no cover - unit pattern already restricted
 
 
-def aggregate_bars(df: pl.DataFrame, timeframe: str, _method: AggregationMethod = "default") -> pl.DataFrame:
+def aggregate_bars(
+    df: pl.DataFrame, timeframe: str, _method: AggregationMethod = "default"
+) -> pl.DataFrame:
     """Aggregate 1m bars to a higher timeframe using provider-mimicking rules.
 
     Default rule: open=first, high=max, low=min, close=last, volume=sum.
@@ -73,24 +75,21 @@ def aggregate_bars(df: pl.DataFrame, timeframe: str, _method: AggregationMethod 
 
     # Bucket timestamps aligned to wall-clock boundaries
     df = df.sort("timestamp")
-    bucketed = df.with_columns(
-        pl.col("timestamp").dt.truncate("1d").alias("_day_start")
-    ).with_columns(
-        (
-            (pl.col("timestamp") - pl.col("_day_start"))
-            .dt.total_seconds()
-            .floordiv(60)
-        ).alias("_minutes_since_day")
-    ).with_columns(
-        (
-            pl.col("_minutes_since_day")
-            .floordiv(minutes)
-            * minutes
-        ).cast(pl.Int64).alias("_bucket_minutes")
-    ).with_columns(
-        (
-            pl.col("_day_start") + pl.duration(minutes=pl.col("_bucket_minutes"))
-        ).alias("bucket")
+    bucketed = (
+        df.with_columns(pl.col("timestamp").dt.truncate("1d").alias("_day_start"))
+        .with_columns(
+            ((pl.col("timestamp") - pl.col("_day_start")).dt.total_seconds().floordiv(60)).alias(
+                "_minutes_since_day"
+            )
+        )
+        .with_columns(
+            (pl.col("_minutes_since_day").floordiv(minutes) * minutes)
+            .cast(pl.Int64)
+            .alias("_bucket_minutes")
+        )
+        .with_columns(
+            (pl.col("_day_start") + pl.duration(minutes=pl.col("_bucket_minutes"))).alias("bucket")
+        )
     )
 
     agg = bucketed.group_by("bucket", maintain_order=True).agg(

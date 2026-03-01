@@ -20,10 +20,16 @@ app = typer.Typer()
 
 @app.command("compare")
 def compare_data(
-    source1: Annotated[str, typer.Argument(help="First source: 'provider:symbol' (e.g., 'oanda:EUR_USD')")],
-    source2: Annotated[str, typer.Argument(help="Second source: 'provider:symbol' (e.g., 'polygon:EUR_USD')")],
+    source1: Annotated[
+        str, typer.Argument(help="First source: 'provider:symbol' (e.g., 'oanda:EUR_USD')")
+    ],
+    source2: Annotated[
+        str, typer.Argument(help="Second source: 'provider:symbol' (e.g., 'polygon:EUR_USD')")
+    ],
     timeframe: Annotated[str, typer.Option("--timeframe", "-t", help="Timeframe")] = "1m",
-    output: Annotated[str | None, typer.Option("--output", "-o", help="Output file (CSV or JSON)")] = None,
+    output: Annotated[
+        str | None, typer.Option("--output", "-o", help="Output file (CSV or JSON)")
+    ] = None,
 ) -> None:
     """Compare data between two sources (cross-provider or cross-symbol).
 
@@ -75,23 +81,27 @@ def compare_data(
     console.print(info_table)
 
     # Align timestamps (inner join)
-    df1_renamed = df1.select([
-        pl.col("timestamp"),
-        pl.col("open").alias("open_1"),
-        pl.col("high").alias("high_1"),
-        pl.col("low").alias("low_1"),
-        pl.col("close").alias("close_1"),
-        pl.col("volume").alias("volume_1"),
-    ])
+    df1_renamed = df1.select(
+        [
+            pl.col("timestamp"),
+            pl.col("open").alias("open_1"),
+            pl.col("high").alias("high_1"),
+            pl.col("low").alias("low_1"),
+            pl.col("close").alias("close_1"),
+            pl.col("volume").alias("volume_1"),
+        ]
+    )
 
-    df2_renamed = df2.select([
-        pl.col("timestamp"),
-        pl.col("open").alias("open_2"),
-        pl.col("high").alias("high_2"),
-        pl.col("low").alias("low_2"),
-        pl.col("close").alias("close_2"),
-        pl.col("volume").alias("volume_2"),
-    ])
+    df2_renamed = df2.select(
+        [
+            pl.col("timestamp"),
+            pl.col("open").alias("open_2"),
+            pl.col("high").alias("high_2"),
+            pl.col("low").alias("low_2"),
+            pl.col("close").alias("close_2"),
+            pl.col("volume").alias("volume_2"),
+        ]
+    )
 
     aligned = df1_renamed.join(df2_renamed, on="timestamp", how="inner")
 
@@ -104,13 +114,15 @@ def compare_data(
     console.print(f"\n[green]Matched {len(aligned):,} bars with aligned timestamps[/green]")
 
     # Calculate differences
-    diff_df = aligned.with_columns([
-        (pl.col("open_1") - pl.col("open_2")).alias("open_diff"),
-        (pl.col("high_1") - pl.col("high_2")).alias("high_diff"),
-        (pl.col("low_1") - pl.col("low_2")).alias("low_diff"),
-        (pl.col("close_1") - pl.col("close_2")).alias("close_diff"),
-        (pl.col("volume_1") - pl.col("volume_2")).alias("volume_diff"),
-    ])
+    diff_df = aligned.with_columns(
+        [
+            (pl.col("open_1") - pl.col("open_2")).alias("open_diff"),
+            (pl.col("high_1") - pl.col("high_2")).alias("high_diff"),
+            (pl.col("low_1") - pl.col("low_2")).alias("low_diff"),
+            (pl.col("close_1") - pl.col("close_2")).alias("close_diff"),
+            (pl.col("volume_1") - pl.col("volume_2")).alias("volume_diff"),
+        ]
+    )
 
     # Statistics table
     stats_table = Table(title="Difference Statistics")

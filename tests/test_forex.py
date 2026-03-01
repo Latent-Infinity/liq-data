@@ -9,14 +9,16 @@ from liq.data.forex import detect_gap_policy, normalize_hourly
 
 def _sample_df(timestamps: list[datetime]) -> pl.DataFrame:
     base = [1.1000 + i * 0.0001 for i in range(len(timestamps))]
-    return pl.DataFrame({
-        "timestamp": timestamps,
-        "open": base,
-        "high": [v + 0.0002 for v in base],
-        "low": [v - 0.0002 for v in base],
-        "close": [v + 0.00005 for v in base],
-        "volume": [1000 + i for i in range(len(timestamps))],
-    })
+    return pl.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": base,
+            "high": [v + 0.0002 for v in base],
+            "low": [v - 0.0002 for v in base],
+            "close": [v + 0.00005 for v in base],
+            "volume": [1000 + i for i in range(len(timestamps))],
+        }
+    )
 
 
 def test_normalize_hourly_fills_gaps() -> None:

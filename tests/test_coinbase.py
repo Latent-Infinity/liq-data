@@ -116,9 +116,7 @@ class TestCoinbaseProviderCreation:
         )
         assert provider._auth_enabled is True
 
-    def test_supported_timeframes(
-        self, coinbase_provider: CoinbaseProvider
-    ) -> None:
+    def test_supported_timeframes(self, coinbase_provider: CoinbaseProvider) -> None:
         """Test supported timeframes include standard intervals."""
         timeframes = coinbase_provider.supported_timeframes
         assert "1m" in timeframes
@@ -146,9 +144,7 @@ class TestCoinbaseProviderFetchBars:
                 return httpx.Response(200, json=mock_candles_response)
             return httpx.Response(200, json=[])
 
-        respx.get(url__regex=r".*/products/BTC-USD/candles.*").mock(
-            side_effect=mock_response
-        )
+        respx.get(url__regex=r".*/products/BTC-USD/candles.*").mock(side_effect=mock_response)
 
         result = coinbase_provider.fetch_bars(
             "BTC-USD", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
@@ -291,9 +287,7 @@ class TestCoinbaseProviderListInstruments:
 class TestCoinbaseProviderSymbolNormalization:
     """Tests for symbol normalization."""
 
-    def test_normalize_symbol_hyphen_format(
-        self, coinbase_provider: CoinbaseProvider
-    ) -> None:
+    def test_normalize_symbol_hyphen_format(self, coinbase_provider: CoinbaseProvider) -> None:
         """Test symbol with hyphen is unchanged."""
         assert coinbase_provider._normalize_symbol("BTC-USD") == "BTC-USD"
         assert coinbase_provider._normalize_symbol("ETH-USD") == "ETH-USD"
@@ -350,9 +344,7 @@ class TestCoinbaseProviderPagination:
                 return httpx.Response(200, json=mock_candles_response)
             return httpx.Response(200, json=[])
 
-        respx.get(url__regex=r".*/products/BTC-USD/candles.*").mock(
-            side_effect=mock_response
-        )
+        respx.get(url__regex=r".*/products/BTC-USD/candles.*").mock(side_effect=mock_response)
 
         result = coinbase_provider.fetch_bars(
             "BTC-USD", date(2024, 1, 1), date(2024, 1, 31), timeframe="1h"

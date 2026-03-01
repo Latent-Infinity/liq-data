@@ -18,17 +18,19 @@ def test_cli_qa_storage(tmp_path: Path) -> None:
     store = ParquetStore(str(tmp_path))
     storage_key = "oanda/EUR_USD/bars/1m"
 
-    df = pl.DataFrame({
-        "timestamp": [
-            datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-            datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-        ],
-        "open": [1.0, 1.5],
-        "high": [2.0, 2.5],
-        "low": [0.5, 1.0],
-        "close": [1.5, 2.0],
-        "volume": [10.0, 20.0],
-    })
+    df = pl.DataFrame(
+        {
+            "timestamp": [
+                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+            ],
+            "open": [1.0, 1.5],
+            "high": [2.0, 2.5],
+            "low": [0.5, 1.0],
+            "close": [1.5, 2.0],
+            "volume": [10.0, 20.0],
+        }
+    )
     store.write(storage_key, df, mode="overwrite")
 
     get_settings.cache_clear()

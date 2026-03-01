@@ -32,17 +32,19 @@ def sample_bars_df() -> pl.DataFrame:
     """Create a sample bars DataFrame."""
     from datetime import UTC, datetime
 
-    return pl.DataFrame({
-        "timestamp": [
-            datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
-            datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
-        ],
-        "open": [1.0850, 1.0860],
-        "high": [1.0875, 1.0890],
-        "low": [1.0825, 1.0850],
-        "close": [1.0860, 1.0885],
-        "volume": [1000.0, 1500.0],
-    })
+    return pl.DataFrame(
+        {
+            "timestamp": [
+                datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
+            ],
+            "open": [1.0850, 1.0860],
+            "high": [1.0875, 1.0890],
+            "low": [1.0825, 1.0850],
+            "close": [1.0860, 1.0885],
+            "volume": [1000.0, 1500.0],
+        }
+    )
 
 
 class TestAsyncRetryPolicy:
@@ -68,9 +70,7 @@ class TestAsyncRetryPolicy:
 class TestAsyncDataFetcherCreation:
     """Tests for AsyncDataFetcher instantiation."""
 
-    def test_create_fetcher(
-        self, mock_provider: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_create_fetcher(self, mock_provider: MagicMock, mock_store: MagicMock) -> None:
         """Test AsyncDataFetcher creation."""
         fetcher = AsyncDataFetcher(
             provider=mock_provider,
@@ -82,9 +82,7 @@ class TestAsyncDataFetcherCreation:
         assert fetcher.provider is mock_provider
         assert fetcher.store is mock_store
 
-    def test_custom_retry_policy(
-        self, mock_provider: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_custom_retry_policy(self, mock_provider: MagicMock, mock_store: MagicMock) -> None:
         """Test custom retry policy."""
         policy = AsyncRetryPolicy(max_retries=5)
 
@@ -313,9 +311,7 @@ class TestAsyncDataFetcherFetchMultiple:
 
         async def track_concurrency(*args, **kwargs) -> pl.DataFrame:
             concurrent_count["current"] += 1
-            concurrent_count["max"] = max(
-                concurrent_count["max"], concurrent_count["current"]
-            )
+            concurrent_count["max"] = max(concurrent_count["max"], concurrent_count["current"])
             await asyncio.sleep(0.01)  # Small delay
             concurrent_count["current"] -= 1
             return sample_bars_df

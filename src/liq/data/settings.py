@@ -60,6 +60,7 @@ def _find_data_root() -> Path:
     # Default to ./data
     return Path("./data")
 
+
 if TYPE_CHECKING:
     from liq.data.providers.alpaca import AlpacaProvider
     from liq.data.providers.binance import BinanceProvider
@@ -97,9 +98,7 @@ class LiqDataSettings(BaseSettings):
     binance_api_secret: str | None = Field(
         default=None, description="Binance API secret (optional for public data)"
     )
-    binance_use_us: bool = Field(
-        default=False, description="Use Binance.US instead of Binance.com"
-    )
+    binance_use_us: bool = Field(default=False, description="Use Binance.US instead of Binance.com")
 
     # TradeStation settings (OAuth2)
     tradestation_client_id: str | None = Field(
@@ -124,9 +123,7 @@ class LiqDataSettings(BaseSettings):
     )
 
     # Coinbase settings
-    coinbase_api_key: str | None = Field(
-        default=None, description="Coinbase Exchange API key"
-    )
+    coinbase_api_key: str | None = Field(default=None, description="Coinbase Exchange API key")
     coinbase_api_secret: str | None = Field(
         default=None, description="Coinbase Exchange API secret (base64 encoded)"
     )
@@ -135,17 +132,11 @@ class LiqDataSettings(BaseSettings):
     )
 
     # Polygon settings
-    polygon_api_key: str | None = Field(
-        default=None, description="Polygon.io API key"
-    )
+    polygon_api_key: str | None = Field(default=None, description="Polygon.io API key")
 
     # Alpaca settings
-    alpaca_api_key: str | None = Field(
-        default=None, description="Alpaca API key"
-    )
-    alpaca_api_secret: str | None = Field(
-        default=None, description="Alpaca API secret"
-    )
+    alpaca_api_key: str | None = Field(default=None, description="Alpaca API key")
+    alpaca_api_secret: str | None = Field(default=None, description="Alpaca API secret")
 
     # Storage settings
     data_root: Path = Field(
@@ -200,14 +191,12 @@ def create_oanda_provider(settings: LiqDataSettings | None = None) -> "OandaProv
 
     if not settings.oanda_api_key:
         raise ValueError(
-            "OANDA_API_KEY not configured. "
-            "Set it in .env file or as environment variable."
+            "OANDA_API_KEY not configured. Set it in .env file or as environment variable."
         )
 
     if not settings.oanda_account_id:
         raise ValueError(
-            "OANDA_ACCOUNT_ID not configured. "
-            "Set it in .env file or as environment variable."
+            "OANDA_ACCOUNT_ID not configured. Set it in .env file or as environment variable."
         )
 
     return OandaProvider(
@@ -263,8 +252,7 @@ def create_tradestation_provider(
 
     if not settings.tradestation_client_id:
         raise ValueError(
-            "TRADESTATION_CLIENT_ID not configured. "
-            "Set it in .env file or as environment variable."
+            "TRADESTATION_CLIENT_ID not configured. Set it in .env file or as environment variable."
         )
 
     if not settings.tradestation_client_secret:
@@ -307,20 +295,17 @@ def create_coinbase_provider(
 
     if not settings.coinbase_api_key:
         raise ValueError(
-            "COINBASE_API_KEY not configured. "
-            "Set it in .env file or as environment variable."
+            "COINBASE_API_KEY not configured. Set it in .env file or as environment variable."
         )
 
     if not settings.coinbase_api_secret:
         raise ValueError(
-            "COINBASE_API_SECRET not configured. "
-            "Set it in .env file or as environment variable."
+            "COINBASE_API_SECRET not configured. Set it in .env file or as environment variable."
         )
 
     if not settings.coinbase_passphrase:
         raise ValueError(
-            "COINBASE_PASSPHRASE not configured. "
-            "Set it in .env file or as environment variable."
+            "COINBASE_PASSPHRASE not configured. Set it in .env file or as environment variable."
         )
 
     return CoinbaseProvider(
@@ -351,8 +336,7 @@ def create_polygon_provider(
 
     if not settings.polygon_api_key:
         raise ValueError(
-            "POLYGON_API_KEY not configured. "
-            "Set it in .env file or as environment variable."
+            "POLYGON_API_KEY not configured. Set it in .env file or as environment variable."
         )
 
     return PolygonProvider(
@@ -381,14 +365,12 @@ def create_alpaca_provider(
 
     if not settings.alpaca_api_key:
         raise ValueError(
-            "ALPACA_API_KEY not configured. "
-            "Set it in .env file or as environment variable."
+            "ALPACA_API_KEY not configured. Set it in .env file or as environment variable."
         )
 
     if not settings.alpaca_api_secret:
         raise ValueError(
-            "ALPACA_API_SECRET not configured. "
-            "Set it in .env file or as environment variable."
+            "ALPACA_API_SECRET not configured. Set it in .env file or as environment variable."
         )
 
     return AlpacaProvider(
@@ -523,16 +505,20 @@ def list_available_data() -> list[dict[str, str]]:
     for key in keys:
         parts = key.split("/")
         if len(parts) >= 4 and parts[2] == "bars":
-            result.append({
-                "provider": parts[0],
-                "symbol": parts[1],
-                "timeframe": parts[3],
-            })
+            result.append(
+                {
+                    "provider": parts[0],
+                    "symbol": parts[1],
+                    "timeframe": parts[3],
+                }
+            )
         elif len(parts) >= 3:
-            result.append({
-                "provider": parts[0],
-                "symbol": parts[1],
-                "timeframe": parts[2],
-            })
+            result.append(
+                {
+                    "provider": parts[0],
+                    "symbol": parts[1],
+                    "timeframe": parts[2],
+                }
+            )
 
     return result

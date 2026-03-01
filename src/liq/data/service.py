@@ -6,7 +6,7 @@ functionality for programmatic access.
 Design Principles:
     - SRP: DataService handles high-level data operations
     - OCP: New operations can be added without modifying existing methods
-    - DIP: Depends on abstractions (DataProvider protocol), not implementations
+    - DIP: Depends on abstractions (MarketDataProvider protocol), not implementations
     - DRY: Uses liq-store for all storage operations (single source of truth)
 
 Example:
@@ -56,7 +56,7 @@ from liq.store import key_builder
 from liq.store.parquet import ParquetStore
 
 if TYPE_CHECKING:
-    from liq.data.protocols import DataProvider
+    from liq.data.protocols import MarketDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -122,14 +122,14 @@ class DataService:
         """Build storage key for bars via provider/key_builder."""
         return f"{provider}/{key_builder.bars(symbol, timeframe)}"
 
-    def _get_provider(self, provider_name: str) -> DataProvider:
+    def _get_provider(self, provider_name: str) -> MarketDataProvider:
         """Get a provider instance by name.
 
         Args:
             provider_name: Provider name (e.g., "oanda", "binance")
 
         Returns:
-            DataProvider instance
+            MarketDataProvider instance
 
         Raises:
             ValueError: If provider is not supported
@@ -137,9 +137,7 @@ class DataService:
         factory = self._PROVIDER_FACTORIES.get(provider_name.lower())
         if factory is None:
             supported = ", ".join(self._PROVIDER_FACTORIES.keys())
-            raise ValueError(
-                f"Unknown provider: {provider_name}. Supported: {supported}"
-            )
+            raise ValueError(f"Unknown provider: {provider_name}. Supported: {supported}")
         return factory(self._settings)
 
     def load(
@@ -212,9 +210,7 @@ class DataService:
                 base_key = self._storage_key(provider, symbol, "1m")
                 if self._store.exists(base_key):
                     if batch_size is not None:
-                        raise ValueError(
-                            "batch_size is not supported for aggregated reads"
-                        )
+                        raise ValueError("batch_size is not supported for aggregated reads")
                     base_df = self._store.read(
                         base_key,
                         start=start,
@@ -285,11 +281,13 @@ class DataService:
         for key in keys:
             parts = key.split("/")
             if len(parts) >= 4 and parts[2] == "bars":  # provider/symbol/bars/timeframe
-                result.append({
-                    "provider": parts[0],
-                    "symbol": parts[1],
-                    "timeframe": parts[3],
-                })
+                result.append(
+                    {
+                        "provider": parts[0],
+                        "symbol": parts[1],
+                        "timeframe": parts[3],
+                    }
+                )
 
         return result
 
@@ -415,11 +413,15 @@ class DataService:
     ) -> pl.DataFrame:
         """Fetch only missing ranges based on gaps in stored data."""
         storage_key = self._storage_key(provider, symbol, timeframe)
-        existing = self._store.read(storage_key) if self._store.exists(storage_key) else pl.DataFrame()
+        existing = (
+            self._store.read(storage_key) if self._store.exists(storage_key) else pl.DataFrame()
+        )
         prov = self._get_provider(provider)
 
         if existing.is_empty():
-            return self.fetch(provider, symbol, start, end, timeframe=timeframe, save=True, mode="append")
+            return self.fetch(
+                provider, symbol, start, end, timeframe=timeframe, save=True, mode="append"
+            )
 
         # If we have too few points to infer gaps, refetch the range
         if existing.height < 2:
@@ -427,7 +429,9 @@ class DataService:
             if not gap_df.is_empty():
                 validate_ohlc(gap_df)
                 self._store.write(storage_key, gap_df, mode="append")
-                combined = pl.concat([existing, gap_df]).unique(subset=["timestamp"]).sort("timestamp")
+                combined = (
+                    pl.concat([existing, gap_df]).unique(subset=["timestamp"]).sort("timestamp")
+                )
                 return combined
             return existing
 
@@ -437,9 +441,20 @@ class DataService:
 
         # Cover ends if needed
         if existing["timestamp"].min() > datetime.combine(start, datetime.min.time(), tzinfo=UTC):
-            gaps.insert(0, (datetime.combine(start, datetime.min.time(), tzinfo=UTC), existing["timestamp"].min()))
+            gaps.insert(
+                0,
+                (
+                    datetime.combine(start, datetime.min.time(), tzinfo=UTC),
+                    existing["timestamp"].min(),
+                ),
+            )
         if existing["timestamp"].max() < datetime.combine(end, datetime.min.time(), tzinfo=UTC):
-            gaps.append((existing["timestamp"].max(), datetime.combine(end, datetime.min.time(), tzinfo=UTC)))
+            gaps.append(
+                (
+                    existing["timestamp"].max(),
+                    datetime.combine(end, datetime.min.time(), tzinfo=UTC),
+                )
+            )
 
         for gap_start, gap_end in gaps:
             gap_df = prov.fetch_bars(symbol, gap_start.date(), gap_end.date(), timeframe=timeframe)
@@ -451,7 +466,9 @@ class DataService:
         if not fetched_parts:
             return existing
 
-        combined = pl.concat([existing, *fetched_parts]).unique(subset=["timestamp"]).sort("timestamp")
+        combined = (
+            pl.concat([existing, *fetched_parts]).unique(subset=["timestamp"]).sort("timestamp")
+        )
         return combined
 
     def validate(self, provider: str, symbol: str, timeframe: str) -> dict[str, Any]:
@@ -606,7 +623,9 @@ class DataService:
         storage_key = self._storage_key(provider, symbol, timeframe)
         return self._store.exists(storage_key)
 
-    def gaps(self, provider: str, symbol: str, timeframe: str, expected_minutes: int) -> list[tuple[Any, Any]]:
+    def gaps(
+        self, provider: str, symbol: str, timeframe: str, expected_minutes: int
+    ) -> list[tuple[Any, Any]]:
         """Detect gaps for a symbol/timeframe using expected minutes."""
         df = self.load(provider, symbol, timeframe)
         if df.is_empty():

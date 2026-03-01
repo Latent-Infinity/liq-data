@@ -15,10 +15,14 @@ app = typer.Typer(help="Authentication helpers for provider flows")
 
 @app.command("tradestation-auth-url")
 def tradestation_auth_url(
-    redirect_uri: Annotated[str | None, typer.Option("--redirect-uri", help="OAuth redirect URI")] = None,
+    redirect_uri: Annotated[
+        str | None, typer.Option("--redirect-uri", help="OAuth redirect URI")
+    ] = None,
     scope: Annotated[str | None, typer.Option("--scope", help="OAuth scopes")] = None,
     audience: Annotated[str | None, typer.Option("--audience", help="OAuth audience")] = None,
-    state: Annotated[str | None, typer.Option("--state", help="Opaque state to prevent CSRF")] = None,
+    state: Annotated[
+        str | None, typer.Option("--state", help="Opaque state to prevent CSRF")
+    ] = None,
 ) -> None:
     """Generate the TradeStation authorization URL for the Auth Code flow."""
     settings = get_settings()
@@ -29,7 +33,9 @@ def tradestation_auth_url(
 
     redirect = redirect_uri or settings.tradestation_redirect_uri
     if not redirect:
-        console.print("[red]Missing redirect URI. Set TRADESTATION_REDIRECT_URI or pass --redirect-uri.[/red]")
+        console.print(
+            "[red]Missing redirect URI. Set TRADESTATION_REDIRECT_URI or pass --redirect-uri.[/red]"
+        )
         raise typer.Exit(1)
 
     resolved_scope = scope or settings.tradestation_scopes
@@ -51,7 +57,9 @@ def tradestation_auth_url(
 @app.command("tradestation-exchange-code")
 def tradestation_exchange_code(
     code: Annotated[str, typer.Argument(help="Authorization code from redirect")],
-    redirect_uri: Annotated[str | None, typer.Option("--redirect-uri", help="OAuth redirect URI")] = None,
+    redirect_uri: Annotated[
+        str | None, typer.Option("--redirect-uri", help="OAuth redirect URI")
+    ] = None,
 ) -> None:
     """Exchange a TradeStation auth code for a refresh token."""
     settings = get_settings()
@@ -63,7 +71,9 @@ def tradestation_exchange_code(
 
     redirect = redirect_uri or settings.tradestation_redirect_uri
     if not redirect:
-        console.print("[red]Missing redirect URI. Set TRADESTATION_REDIRECT_URI or pass --redirect-uri.[/red]")
+        console.print(
+            "[red]Missing redirect URI. Set TRADESTATION_REDIRECT_URI or pass --redirect-uri.[/red]"
+        )
         raise typer.Exit(1)
 
     try:
@@ -79,7 +89,9 @@ def tradestation_exchange_code(
 
     refresh_token = data.get("refresh_token")
     if not refresh_token:
-        console.print("[red]No refresh token returned. Ensure offline_access scope is included.[/red]")
+        console.print(
+            "[red]No refresh token returned. Ensure offline_access scope is included.[/red]"
+        )
         raise typer.Exit(1)
 
     console.print("[green]Refresh token received.[/green]")

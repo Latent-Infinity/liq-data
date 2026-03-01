@@ -52,9 +52,7 @@ def normalize_hourly(
     if df["timestamp"].dtype.time_zone is None:
         raise DataQualityError("Timestamps must be timezone-aware UTC")
 
-    non_monotonic = df.select(
-        (pl.col("timestamp") < pl.col("timestamp").shift(1)).any()
-    ).item()
+    non_monotonic = df.select((pl.col("timestamp") < pl.col("timestamp").shift(1)).any()).item()
     if non_monotonic:
         raise DataQualityError("Timestamps must be monotonic ascending")
 
@@ -110,13 +108,16 @@ def normalize_hourly(
 
     if "volume" in merged.columns:
         merged = merged.with_columns(
-            pl.when(pl.col("_present").is_null()).then(0.0).otherwise(pl.col("volume")).alias("volume")
+            pl.when(pl.col("_present").is_null())
+            .then(0.0)
+            .otherwise(pl.col("volume"))
+            .alias("volume")
         )
     else:
         merged = merged.with_columns(pl.lit(0.0).alias("volume"))
 
-    merged = merged.with_columns(
-        pl.col("_present").is_null().alias("is_synthetic_bar")
-    ).drop(["_present", "_ff_close"])
+    merged = merged.with_columns(pl.col("_present").is_null().alias("is_synthetic_bar")).drop(
+        ["_present", "_ff_close"]
+    )
 
     return merged

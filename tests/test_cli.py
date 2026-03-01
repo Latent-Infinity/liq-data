@@ -77,7 +77,9 @@ class TestCommonHelpers:
 
     def test_get_provider_config_error(self) -> None:
         with (
-            patch("liq.data.cli.common.create_oanda_provider", side_effect=ValueError("bad config")),
+            patch(
+                "liq.data.cli.common.create_oanda_provider", side_effect=ValueError("bad config")
+            ),
             pytest.raises(typer.Exit),
         ):
             get_provider("oanda")
@@ -167,14 +169,16 @@ class TestInfoCommand:
         # Create test data using ParquetStore
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.info.get_store") as mock_store:
@@ -203,14 +207,16 @@ class TestInfoCommand:
         """Test info command shows details for specific symbol."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.info.get_store") as mock_store:
@@ -242,18 +248,20 @@ class TestValidateCommand:
         """Test validate command with clean data."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 10, 0),
-                datetime(2024, 1, 1, 10, 1),
-                datetime(2024, 1, 1, 10, 2),
-            ],
-            "open": [1.0, 1.1, 1.2],
-            "high": [1.1, 1.2, 1.3],
-            "low": [0.9, 1.0, 1.1],
-            "close": [1.05, 1.15, 1.25],
-            "volume": [100.0, 200.0, 150.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 10, 0),
+                    datetime(2024, 1, 1, 10, 1),
+                    datetime(2024, 1, 1, 10, 2),
+                ],
+                "open": [1.0, 1.1, 1.2],
+                "high": [1.1, 1.2, 1.3],
+                "low": [0.9, 1.0, 1.1],
+                "close": [1.05, 1.15, 1.25],
+                "volume": [100.0, 200.0, 150.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -291,7 +299,9 @@ class TestAuthCommands:
             mock.tradestation_scopes = "scope"
             mock_settings.return_value = mock
 
-            with patch("liq.data.providers.tradestation.TradeStationProvider.build_authorization_url") as mock_build:
+            with patch(
+                "liq.data.providers.tradestation.TradeStationProvider.build_authorization_url"
+            ) as mock_build:
                 mock_build.return_value = "https://auth.example.com"
                 result = runner.invoke(app, ["tradestation-auth-url", "--state", "state123"])
 
@@ -336,7 +346,9 @@ class TestAuthCommands:
             mock.tradestation_redirect_uri = "https://example.com/callback"
             mock_settings.return_value = mock
 
-            with patch("liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code") as mock_exchange:
+            with patch(
+                "liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code"
+            ) as mock_exchange:
                 mock_exchange.return_value = {"refresh_token": "refresh123"}
                 result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
 
@@ -352,7 +364,9 @@ class TestAuthCommands:
             mock.tradestation_redirect_uri = "https://example.com/callback"
             mock_settings.return_value = mock
 
-            with patch("liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code") as mock_exchange:
+            with patch(
+                "liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code"
+            ) as mock_exchange:
                 mock_exchange.side_effect = AuthenticationError("bad code")
                 result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
 
@@ -382,7 +396,9 @@ class TestAuthCommands:
             mock.tradestation_redirect_uri = "https://example.com/callback"
             mock_settings.return_value = mock
 
-            with patch("liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code") as mock_exchange:
+            with patch(
+                "liq.data.providers.tradestation.TradeStationProvider.exchange_authorization_code"
+            ) as mock_exchange:
                 mock_exchange.return_value = {"access_token": "token"}
                 result = runner.invoke(app, ["tradestation-exchange-code", "code123"])
 
@@ -425,17 +441,19 @@ class TestFetchCommandEdgeCases:
         assert "no data returned" in result.output.lower()
 
     def test_fetch_dry_run_shows_preview(self) -> None:
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, tzinfo=UTC),
-                datetime(2024, 1, 2, tzinfo=UTC),
-            ],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                    datetime(2024, 1, 2, tzinfo=UTC),
+                ],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         with patch("liq.data.cli.fetch.DataService") as mock_service:
             mock_service.return_value.fetch.return_value = df
             result = runner.invoke(
@@ -447,14 +465,16 @@ class TestFetchCommandEdgeCases:
         assert "Stored via liq-store" not in result.output
 
     def test_backfill_runs_successfully(self) -> None:
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         with patch("liq.data.cli.fetch.DataService") as mock_service:
             mock_service.return_value.backfill.return_value = df
             result = runner.invoke(
@@ -468,14 +488,16 @@ class TestFetchCommandEdgeCases:
         """Test validate command detects null values."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
-            "open": [1.0, None],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "open": [1.0, None],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -492,14 +514,16 @@ class TestFetchCommandEdgeCases:
 
         # Write data with duplicate timestamps - liq-store will deduplicate
         ts = datetime(2024, 1, 1)
-        df = pl.DataFrame({
-            "timestamp": [ts, ts],  # Duplicate - will be deduplicated by liq-store
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [ts, ts],  # Duplicate - will be deduplicated by liq-store
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         # Verify liq-store deduplicated the data
@@ -519,14 +543,16 @@ class TestFetchCommandEdgeCases:
         """Test validate command detects OHLC inconsistency (high < low)."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [0.8],  # Invalid: high < low
-            "low": [1.2],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [0.8],  # Invalid: high < low
+                "low": [1.2],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -541,14 +567,16 @@ class TestFetchCommandEdgeCases:
         """Test validate command detects negative values."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [-1.0],  # Negative
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [-1.0],  # Negative
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -560,19 +588,21 @@ class TestFetchCommandEdgeCases:
             assert "Negative" in result.output
 
     def test_detects_duplicates_unsorted_and_gaps(self) -> None:
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 2),
-                datetime(2024, 1, 1, 0, 0),
-                datetime(2024, 1, 1, 0, 0),
-                datetime(2024, 1, 1, 0, 10),
-            ],
-            "open": [1.0, 1.0, 1.0, 1.1],
-            "high": [1.1, 1.1, 1.1, 1.2],
-            "low": [0.9, 0.9, 0.9, 1.0],
-            "close": [1.05, 1.05, 1.05, 1.15],
-            "volume": [100.0, 100.0, 100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 2),
+                    datetime(2024, 1, 1, 0, 0),
+                    datetime(2024, 1, 1, 0, 0),
+                    datetime(2024, 1, 1, 0, 10),
+                ],
+                "open": [1.0, 1.0, 1.0, 1.1],
+                "high": [1.1, 1.1, 1.1, 1.2],
+                "low": [0.9, 0.9, 0.9, 1.0],
+                "close": [1.05, 1.05, 1.05, 1.15],
+                "volume": [100.0, 100.0, 100.0, 200.0],
+            }
+        )
         store = MagicMock()
         store.exists.return_value = True
         store.read.return_value = df
@@ -585,19 +615,21 @@ class TestFetchCommandEdgeCases:
         assert "Unexpected gaps" in result.output
 
     def test_detects_multiple_ohlc_consistency_issues(self) -> None:
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 0),
-                datetime(2024, 1, 1, 0, 1),
-                datetime(2024, 1, 1, 0, 2),
-                datetime(2024, 1, 1, 0, 3),
-            ],
-            "open": [1.0, 1.0, 1.0, 1.0],
-            "high": [0.9, 0.9, 1.2, 1.2],
-            "low": [0.8, 0.7, 1.1, 0.8],
-            "close": [0.85, 1.1, 1.05, 0.7],
-            "volume": [100.0, 100.0, 100.0, 100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 0),
+                    datetime(2024, 1, 1, 0, 1),
+                    datetime(2024, 1, 1, 0, 2),
+                    datetime(2024, 1, 1, 0, 3),
+                ],
+                "open": [1.0, 1.0, 1.0, 1.0],
+                "high": [0.9, 0.9, 1.2, 1.2],
+                "low": [0.8, 0.7, 1.1, 0.8],
+                "close": [0.85, 1.1, 1.05, 0.7],
+                "volume": [100.0, 100.0, 100.0, 100.0],
+            }
+        )
         store = MagicMock()
         store.exists.return_value = True
         store.read.return_value = df
@@ -630,18 +662,20 @@ class TestStatsCommand:
         """Test stats command shows OHLCV statistics."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1),
-                datetime(2024, 1, 2),
-                datetime(2024, 1, 3),
-            ],
-            "open": [1.0, 1.1, 1.2],
-            "high": [1.1, 1.2, 1.3],
-            "low": [0.9, 1.0, 1.1],
-            "close": [1.05, 1.15, 1.25],
-            "volume": [100.0, 200.0, 150.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1),
+                    datetime(2024, 1, 2),
+                    datetime(2024, 1, 3),
+                ],
+                "open": [1.0, 1.1, 1.2],
+                "high": [1.1, 1.2, 1.3],
+                "low": [0.9, 1.0, 1.1],
+                "close": [1.05, 1.15, 1.25],
+                "volume": [100.0, 200.0, 150.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.info.get_store") as mock_store:
@@ -671,7 +705,11 @@ class TestFetchCommand:
             patch("liq.data.service.get_settings") as mock_settings,
             patch.dict(
                 "liq.data.service.DataService._PROVIDER_FACTORIES",
-                {"oanda": lambda _settings: (_ for _ in ()).throw(ValueError("OANDA_API_KEY not configured"))},
+                {
+                    "oanda": lambda _settings: (_ for _ in ()).throw(
+                        ValueError("OANDA_API_KEY not configured")
+                    )
+                },
             ),
         ):
             settings = MagicMock()
@@ -707,17 +745,19 @@ class TestFetchCommand:
     def test_successful_fetch(self, tmp_path: Path) -> None:
         """Test successful fetch command."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, tzinfo=UTC),
-                datetime(2024, 1, 2, tzinfo=UTC),
-            ],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, tzinfo=UTC),
+                    datetime(2024, 1, 2, tzinfo=UTC),
+                ],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         mock_provider.fetch_bars.return_value = mock_df
 
         with (
@@ -742,14 +782,16 @@ class TestFetchCommand:
     def test_fetch_binance_provider(self, tmp_path: Path) -> None:
         """Test fetch with binance provider."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [42000.0],
-            "high": [42500.0],
-            "low": [41500.0],
-            "close": [42200.0],
-            "volume": [100.0],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [42000.0],
+                "high": [42500.0],
+                "low": [41500.0],
+                "close": [42200.0],
+                "volume": [100.0],
+            }
+        )
         mock_provider.fetch_bars.return_value = mock_df
 
         with (
@@ -763,9 +805,7 @@ class TestFetchCommand:
             settings.data_root = tmp_path
             mock_settings.return_value = settings
 
-            result = runner.invoke(
-                app, ["fetch", "binance", "BTC_USDT", "--start", "2024-01-01"]
-            )
+            result = runner.invoke(app, ["fetch", "binance", "BTC_USDT", "--start", "2024-01-01"])
 
             assert result.exit_code == 0
             assert "Fetched" in result.output
@@ -805,12 +845,14 @@ class TestListCommand:
     def test_successful_list(self) -> None:
         """Test successful list command."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "symbol": ["EUR_USD", "GBP_USD"],
-            "name": ["Euro/USD", "Pound/USD"],
-            "asset_class": ["forex", "forex"],
-            "type": ["currency", "currency"],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "symbol": ["EUR_USD", "GBP_USD"],
+                "name": ["Euro/USD", "Pound/USD"],
+                "asset_class": ["forex", "forex"],
+                "type": ["currency", "currency"],
+            }
+        )
         mock_provider.list_instruments.return_value = mock_df
 
         with patch("liq.data.cli.common.create_oanda_provider", return_value=mock_provider):
@@ -823,12 +865,14 @@ class TestListCommand:
     def test_list_binance_provider(self) -> None:
         """Test list with binance provider."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "symbol": ["BTC_USDT"],
-            "name": ["Bitcoin/USDT"],
-            "asset_class": ["crypto"],
-            "type": ["spot"],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "symbol": ["BTC_USDT"],
+                "name": ["Bitcoin/USDT"],
+                "asset_class": ["crypto"],
+                "type": ["spot"],
+            }
+        )
         mock_provider.list_instruments.return_value = mock_df
 
         with patch("liq.data.cli.common.create_binance_provider", return_value=mock_provider):
@@ -841,12 +885,14 @@ class TestListCommand:
     def test_list_with_asset_class_filter(self) -> None:
         """Test list command with asset class filter."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "symbol": ["EUR_USD"],
-            "name": ["Euro/USD"],
-            "asset_class": ["forex"],
-            "type": ["currency"],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "symbol": ["EUR_USD"],
+                "name": ["Euro/USD"],
+                "asset_class": ["forex"],
+                "type": ["currency"],
+            }
+        )
         mock_provider.list_instruments.return_value = mock_df
 
         with patch("liq.data.cli.common.create_oanda_provider", return_value=mock_provider):
@@ -864,14 +910,16 @@ class TestShowSymbolInfo:
         from liq.data.cli.info import _show_symbol_info
 
         store = ParquetStore(str(tmp_path))
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         # Just verify it doesn't raise
@@ -903,14 +951,16 @@ class TestDeleteCommand:
         """Test delete command removes existing data via liq-store."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
         assert store.exists("oanda/EUR_USD/bars/1m")
 
@@ -939,14 +989,16 @@ class TestDeleteCommand:
         """Test delete command with confirmation prompt (user confirms)."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
@@ -962,14 +1014,16 @@ class TestDeleteCommand:
         """Test delete command with confirmation prompt (user declines)."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
@@ -986,14 +1040,16 @@ class TestDeleteCommand:
         """Test delete command with --force skips confirmation."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
@@ -1009,14 +1065,16 @@ class TestDeleteCommand:
         """Test delete command with specific timeframe."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
         store.write("oanda/EUR_USD/bars/1h", df)
 
@@ -1040,19 +1098,21 @@ class TestAuditCommand:
         store = ParquetStore(str(tmp_path))
 
         # Create data with a gap (missing 10:2)
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 10, 0),
-                datetime(2024, 1, 1, 10, 1),
-                # Gap here - missing 10:2
-                datetime(2024, 1, 1, 10, 5),
-            ],
-            "open": [1.0, 1.1, 1.2],
-            "high": [1.1, 1.2, 1.3],
-            "low": [0.9, 1.0, 1.1],
-            "close": [1.05, 1.15, 1.25],
-            "volume": [100.0, 200.0, 150.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 10, 0),
+                    datetime(2024, 1, 1, 10, 1),
+                    # Gap here - missing 10:2
+                    datetime(2024, 1, 1, 10, 5),
+                ],
+                "open": [1.0, 1.1, 1.2],
+                "high": [1.1, 1.2, 1.3],
+                "low": [0.9, 1.0, 1.1],
+                "close": [1.05, 1.15, 1.25],
+                "volume": [100.0, 200.0, 150.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -1068,14 +1128,16 @@ class TestAuditCommand:
         """Test audit command reports quality metrics."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -1103,14 +1165,16 @@ class TestAuditCommand:
         """Test audit command with --dry-run shows what would be done."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -1121,17 +1185,19 @@ class TestAuditCommand:
             assert result.exit_code == 0
 
     def test_audit_shows_gap_details_and_summary(self) -> None:
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 10, 0),
-                datetime(2024, 1, 1, 10, 10),
-            ],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 10, 0),
+                    datetime(2024, 1, 1, 10, 10),
+                ],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store = MagicMock()
         store.exists.return_value = True
         store.read.return_value = df
@@ -1151,14 +1217,16 @@ class TestHealthReportCommand:
         """Test health-report command shows all available symbols."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
         store.write("oanda/GBP_USD/bars/1m", df)
 
@@ -1174,14 +1242,16 @@ class TestHealthReportCommand:
         """Test health-report command with --provider filter."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
         store.write("binance/BTC_USDT/bars/1m", df)
 
@@ -1210,14 +1280,16 @@ class TestHealthReportCommand:
         """Test health-report command shows summary statistics."""
         store = ParquetStore(str(tmp_path))
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1), datetime(2024, 1, 2)],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", df)
 
         with patch("liq.data.cli.validate.get_store") as mock_store:
@@ -1227,17 +1299,21 @@ class TestHealthReportCommand:
 
             assert result.exit_code == 0
             # Should have some summary or status info
-            assert "Health" in result.output or "Report" in result.output or "oanda" in result.output
+            assert (
+                "Health" in result.output or "Report" in result.output or "oanda" in result.output
+            )
 
     def test_health_report_skips_bad_keys_and_errors(self) -> None:
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         store = MagicMock()
         store.list_keys.return_value = ["badkey", "oanda/EUR_USD/bars/1m", "broken/EUR_USD/bars/1m"]
 
@@ -1263,33 +1339,35 @@ class TestCompareCommand:
         """Test comparing same symbol across different providers."""
         store = ParquetStore(str(tmp_path))
 
-        oanda_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1000, 1.1010],
-            "high": [1.1050, 1.1060],
-            "low": [1.0950, 1.0960],
-            "close": [1.1020, 1.1030],
-            "volume": [100.0, 200.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1000, 1.1010],
+                "high": [1.1050, 1.1060],
+                "low": [1.0950, 1.0960],
+                "close": [1.1020, 1.1030],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
         # Similar data with slight differences
-        polygon_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1001, 1.1011],
-            "high": [1.1051, 1.1061],
-            "low": [1.0951, 1.0961],
-            "close": [1.1021, 1.1031],
-            "volume": [110.0, 210.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1001, 1.1011],
+                "high": [1.1051, 1.1061],
+                "low": [1.0951, 1.0961],
+                "close": [1.1021, 1.1031],
+                "volume": [110.0, 210.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"])
 
             assert result.exit_code == 0
             # Should show comparison statistics
@@ -1299,32 +1377,34 @@ class TestCompareCommand:
         """Test comparing different symbols from the same provider."""
         store = ParquetStore(str(tmp_path))
 
-        eur_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1000, 1.1010],
-            "high": [1.1050, 1.1060],
-            "low": [1.0950, 1.0960],
-            "close": [1.1020, 1.1030],
-            "volume": [100.0, 200.0],
-        })
+        eur_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1000, 1.1010],
+                "high": [1.1050, 1.1060],
+                "low": [1.0950, 1.0960],
+                "close": [1.1020, 1.1030],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", eur_df)
 
-        gbp_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.2700, 1.2710],
-            "high": [1.2750, 1.2760],
-            "low": [1.2650, 1.2660],
-            "close": [1.2720, 1.2730],
-            "volume": [150.0, 250.0],
-        })
+        gbp_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.2700, 1.2710],
+                "high": [1.2750, 1.2760],
+                "low": [1.2650, 1.2660],
+                "close": [1.2720, 1.2730],
+                "volume": [150.0, 250.0],
+            }
+        )
         store.write("oanda/GBP_USD/bars/1m", gbp_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "oanda:GBP_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "oanda:GBP_USD"])
 
             assert result.exit_code == 0
             assert "Comparison" in result.output or "compare" in result.output.lower()
@@ -1334,22 +1414,22 @@ class TestCompareCommand:
         store = ParquetStore(str(tmp_path))
 
         # Only create second data source
-        polygon_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0)],
-            "open": [1.1001],
-            "high": [1.1051],
-            "low": [1.0951],
-            "close": [1.1021],
-            "volume": [110.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0)],
+                "open": [1.1001],
+                "high": [1.1051],
+                "low": [1.0951],
+                "close": [1.1021],
+                "volume": [110.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"])
 
             assert result.exit_code == 1
             assert "not found" in result.output.lower()
@@ -1359,22 +1439,22 @@ class TestCompareCommand:
         store = ParquetStore(str(tmp_path))
 
         # Only create first data source
-        oanda_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0)],
-            "open": [1.1000],
-            "high": [1.1050],
-            "low": [1.0950],
-            "close": [1.1020],
-            "volume": [100.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0)],
+                "open": [1.1000],
+                "high": [1.1050],
+                "low": [1.0950],
+                "close": [1.1020],
+                "volume": [100.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"])
 
             assert result.exit_code == 1
             assert "not found" in result.output.lower()
@@ -1384,87 +1464,95 @@ class TestCompareCommand:
         store = ParquetStore(str(tmp_path))
 
         # Oanda has 3 timestamps
-        oanda_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 10, 0),
-                datetime(2024, 1, 1, 10, 1),
-                datetime(2024, 1, 1, 10, 2),
-            ],
-            "open": [1.1000, 1.1010, 1.1020],
-            "high": [1.1050, 1.1060, 1.1070],
-            "low": [1.0950, 1.0960, 1.0970],
-            "close": [1.1020, 1.1030, 1.1040],
-            "volume": [100.0, 200.0, 300.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 10, 0),
+                    datetime(2024, 1, 1, 10, 1),
+                    datetime(2024, 1, 1, 10, 2),
+                ],
+                "open": [1.1000, 1.1010, 1.1020],
+                "high": [1.1050, 1.1060, 1.1070],
+                "low": [1.0950, 1.0960, 1.0970],
+                "close": [1.1020, 1.1030, 1.1040],
+                "volume": [100.0, 200.0, 300.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
         # Polygon has only 2 overlapping timestamps
-        polygon_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 10, 1),  # Only overlaps with middle
-                datetime(2024, 1, 1, 10, 2),  # Only overlaps with last
-            ],
-            "open": [1.1011, 1.1021],
-            "high": [1.1061, 1.1071],
-            "low": [1.0961, 1.0971],
-            "close": [1.1031, 1.1041],
-            "volume": [210.0, 310.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 10, 1),  # Only overlaps with middle
+                    datetime(2024, 1, 1, 10, 2),  # Only overlaps with last
+                ],
+                "open": [1.1011, 1.1021],
+                "high": [1.1061, 1.1071],
+                "low": [1.0961, 1.0971],
+                "close": [1.1031, 1.1041],
+                "volume": [210.0, 310.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"])
 
             assert result.exit_code == 0
             # Should mention aligned/matched bars count
-            assert "2" in result.output or "aligned" in result.output.lower() or "matched" in result.output.lower()
+            assert (
+                "2" in result.output
+                or "aligned" in result.output.lower()
+                or "matched" in result.output.lower()
+            )
 
     def test_compare_calculates_statistics(self, tmp_path: Path) -> None:
         """Test compare command calculates correlation and difference statistics."""
         store = ParquetStore(str(tmp_path))
 
         # Create data with known differences
-        oanda_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 10, 0),
-                datetime(2024, 1, 1, 10, 1),
-                datetime(2024, 1, 1, 10, 2),
-                datetime(2024, 1, 1, 10, 3),
-            ],
-            "open": [1.1000, 1.1010, 1.1020, 1.1030],
-            "high": [1.1050, 1.1060, 1.1070, 1.1080],
-            "low": [1.0950, 1.0960, 1.0970, 1.0980],
-            "close": [1.1020, 1.1030, 1.1040, 1.1050],
-            "volume": [100.0, 200.0, 300.0, 400.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 10, 0),
+                    datetime(2024, 1, 1, 10, 1),
+                    datetime(2024, 1, 1, 10, 2),
+                    datetime(2024, 1, 1, 10, 3),
+                ],
+                "open": [1.1000, 1.1010, 1.1020, 1.1030],
+                "high": [1.1050, 1.1060, 1.1070, 1.1080],
+                "low": [1.0950, 1.0960, 1.0970, 1.0980],
+                "close": [1.1020, 1.1030, 1.1040, 1.1050],
+                "volume": [100.0, 200.0, 300.0, 400.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
         # Polygon with slightly different values
-        polygon_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 10, 0),
-                datetime(2024, 1, 1, 10, 1),
-                datetime(2024, 1, 1, 10, 2),
-                datetime(2024, 1, 1, 10, 3),
-            ],
-            "open": [1.1001, 1.1011, 1.1021, 1.1031],
-            "high": [1.1051, 1.1061, 1.1071, 1.1081],
-            "low": [1.0951, 1.0961, 1.0971, 1.0981],
-            "close": [1.1021, 1.1031, 1.1041, 1.1051],
-            "volume": [105.0, 205.0, 305.0, 405.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 10, 0),
+                    datetime(2024, 1, 1, 10, 1),
+                    datetime(2024, 1, 1, 10, 2),
+                    datetime(2024, 1, 1, 10, 3),
+                ],
+                "open": [1.1001, 1.1011, 1.1021, 1.1031],
+                "high": [1.1051, 1.1061, 1.1071, 1.1081],
+                "low": [1.0951, 1.0961, 1.0971, 1.0981],
+                "close": [1.1021, 1.1031, 1.1041, 1.1051],
+                "volume": [105.0, 205.0, 305.0, 405.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"])
 
             assert result.exit_code == 0
             # Should show some statistics (correlation, mean diff, etc.)
@@ -1483,9 +1571,7 @@ class TestCompareCommand:
             mock_store.return_value = store
 
             # Missing colon separator
-            result = runner.invoke(
-                app, ["compare", "oanda_EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda_EUR_USD", "polygon:EUR_USD"])
 
             assert result.exit_code == 1
             assert "format" in result.output.lower() or "invalid" in result.output.lower()
@@ -1494,24 +1580,28 @@ class TestCompareCommand:
         """Test compare command with --output option for CSV export."""
         store = ParquetStore(str(tmp_path))
 
-        oanda_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1000, 1.1010],
-            "high": [1.1050, 1.1060],
-            "low": [1.0950, 1.0960],
-            "close": [1.1020, 1.1030],
-            "volume": [100.0, 200.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1000, 1.1010],
+                "high": [1.1050, 1.1060],
+                "low": [1.0950, 1.0960],
+                "close": [1.1020, 1.1030],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
-        polygon_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1001, 1.1011],
-            "high": [1.1051, 1.1061],
-            "low": [1.0951, 1.0961],
-            "close": [1.1021, 1.1031],
-            "volume": [110.0, 210.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1001, 1.1011],
+                "high": [1.1051, 1.1061],
+                "low": [1.0951, 1.0961],
+                "close": [1.1021, 1.1031],
+                "volume": [110.0, 210.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         output_file = tmp_path / "comparison.csv"
@@ -1534,24 +1624,28 @@ class TestCompareCommand:
         """Test compare command with --output option for JSON export."""
         store = ParquetStore(str(tmp_path))
 
-        oanda_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1000, 1.1010],
-            "high": [1.1050, 1.1060],
-            "low": [1.0950, 1.0960],
-            "close": [1.1020, 1.1030],
-            "volume": [100.0, 200.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1000, 1.1010],
+                "high": [1.1050, 1.1060],
+                "low": [1.0950, 1.0960],
+                "close": [1.1020, 1.1030],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
-        polygon_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1001, 1.1011],
-            "high": [1.1051, 1.1061],
-            "low": [1.0951, 1.0961],
-            "close": [1.1021, 1.1031],
-            "volume": [110.0, 210.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1001, 1.1011],
+                "high": [1.1051, 1.1061],
+                "low": [1.0951, 1.0961],
+                "close": [1.1021, 1.1031],
+                "volume": [110.0, 210.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         output_file = tmp_path / "comparison.json"
@@ -1568,6 +1662,7 @@ class TestCompareCommand:
             assert output_file.exists()
             # JSON should be valid
             import json
+
             content = json.loads(output_file.read_text())
             assert isinstance(content, (dict, list))
 
@@ -1576,59 +1671,69 @@ class TestCompareCommand:
         store = ParquetStore(str(tmp_path))
 
         # Different time ranges with no overlap
-        oanda_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1000, 1.1010],
-            "high": [1.1050, 1.1060],
-            "low": [1.0950, 1.0960],
-            "close": [1.1020, 1.1030],
-            "volume": [100.0, 200.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1000, 1.1010],
+                "high": [1.1050, 1.1060],
+                "low": [1.0950, 1.0960],
+                "close": [1.1020, 1.1030],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
-        polygon_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 2, 10, 0), datetime(2024, 1, 2, 10, 1)],  # Next day
-            "open": [1.1001, 1.1011],
-            "high": [1.1051, 1.1061],
-            "low": [1.0951, 1.0961],
-            "close": [1.1021, 1.1031],
-            "volume": [110.0, 210.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 2, 10, 0), datetime(2024, 1, 2, 10, 1)],  # Next day
+                "open": [1.1001, 1.1011],
+                "high": [1.1051, 1.1061],
+                "low": [1.0951, 1.0961],
+                "close": [1.1021, 1.1031],
+                "volume": [110.0, 210.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"])
 
             # Should fail or show warning about no overlap
-            assert "no" in result.output.lower() or "overlap" in result.output.lower() or result.exit_code == 1
+            assert (
+                "no" in result.output.lower()
+                or "overlap" in result.output.lower()
+                or result.exit_code == 1
+            )
 
     def test_compare_with_timeframe_option(self, tmp_path: Path) -> None:
         """Test compare command with --timeframe option."""
         store = ParquetStore(str(tmp_path))
 
         # Create 1h data
-        oanda_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 11, 0)],
-            "open": [1.1000, 1.1010],
-            "high": [1.1050, 1.1060],
-            "low": [1.0950, 1.0960],
-            "close": [1.1020, 1.1030],
-            "volume": [100.0, 200.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 11, 0)],
+                "open": [1.1000, 1.1010],
+                "high": [1.1050, 1.1060],
+                "low": [1.0950, 1.0960],
+                "close": [1.1020, 1.1030],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1h", oanda_df)
 
-        polygon_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 11, 0)],
-            "open": [1.1001, 1.1011],
-            "high": [1.1051, 1.1061],
-            "low": [1.0951, 1.0961],
-            "close": [1.1021, 1.1031],
-            "volume": [110.0, 210.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 11, 0)],
+                "open": [1.1001, 1.1011],
+                "high": [1.1051, 1.1061],
+                "low": [1.0951, 1.0961],
+                "close": [1.1021, 1.1031],
+                "volume": [110.0, 210.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1h", polygon_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
@@ -1645,37 +1750,38 @@ class TestCompareCommand:
         """Test compare command shows differences for each price column."""
         store = ParquetStore(str(tmp_path))
 
-        oanda_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1000, 1.1010],
-            "high": [1.1050, 1.1060],
-            "low": [1.0950, 1.0960],
-            "close": [1.1020, 1.1030],
-            "volume": [100.0, 200.0],
-        })
+        oanda_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1000, 1.1010],
+                "high": [1.1050, 1.1060],
+                "low": [1.0950, 1.0960],
+                "close": [1.1020, 1.1030],
+                "volume": [100.0, 200.0],
+            }
+        )
         store.write("oanda/EUR_USD/bars/1m", oanda_df)
 
-        polygon_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
-            "open": [1.1001, 1.1011],
-            "high": [1.1051, 1.1061],
-            "low": [1.0951, 1.0961],
-            "close": [1.1021, 1.1031],
-            "volume": [110.0, 210.0],
-        })
+        polygon_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 10, 0), datetime(2024, 1, 1, 10, 1)],
+                "open": [1.1001, 1.1011],
+                "high": [1.1051, 1.1061],
+                "low": [1.0951, 1.0961],
+                "close": [1.1021, 1.1031],
+                "volume": [110.0, 210.0],
+            }
+        )
         store.write("polygon/EUR_USD/bars/1m", polygon_df)
 
         with patch("liq.data.cli.manage.get_store") as mock_store:
             mock_store.return_value = store
 
-            result = runner.invoke(
-                app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"]
-            )
+            result = runner.invoke(app, ["compare", "oanda:EUR_USD", "polygon:EUR_USD"])
 
             assert result.exit_code == 0
             # Should show differences for price columns (at least one)
             has_column_info = any(
-                col in result.output.lower()
-                for col in ["open", "high", "low", "close"]
+                col in result.output.lower() for col in ["open", "high", "low", "close"]
             )
             assert has_column_info, f"No price column info in output: {result.output}"

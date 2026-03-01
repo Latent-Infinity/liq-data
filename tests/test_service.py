@@ -13,7 +13,9 @@ from liq.store import key_builder
 from liq.store.parquet import ParquetStore
 
 
-def write_test_data(tmp_path: Path, provider: str, symbol: str, timeframe: str, df: pl.DataFrame) -> None:
+def write_test_data(
+    tmp_path: Path, provider: str, symbol: str, timeframe: str, df: pl.DataFrame
+) -> None:
     """Helper to write test data using ParquetStore."""
     store = ParquetStore(str(tmp_path))
     storage_key = f"{provider}/{key_builder.bars(symbol, timeframe)}"
@@ -50,14 +52,16 @@ class TestDataServiceLoad:
     def test_load_returns_dataframe(self, tmp_path: Path) -> None:
         """Test load returns a Polars DataFrame."""
         # Setup: Create test data using ParquetStore
-        test_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 15, 10, 0, tzinfo=UTC)],
-            "open": [1.0850],
-            "high": [1.0875],
-            "low": [1.0825],
-            "close": [1.0860],
-            "volume": [1000.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 15, 10, 0, tzinfo=UTC)],
+                "open": [1.0850],
+                "high": [1.0875],
+                "low": [1.0825],
+                "close": [1.0860],
+                "volume": [1000.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -69,18 +73,20 @@ class TestDataServiceLoad:
 
     def test_load_aggregates_from_1m(self, tmp_path: Path) -> None:
         """If higher timeframe missing, aggregate from 1m and persist."""
-        test_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
-            ],
-            "open": [1.0, 1.1, 1.2],
-            "high": [1.1, 1.2, 1.3],
-            "low": [0.9, 1.0, 1.1],
-            "close": [1.05, 1.15, 1.25],
-            "volume": [10, 20, 30],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                ],
+                "open": [1.0, 1.1, 1.2],
+                "high": [1.1, 1.2, 1.3],
+                "low": [0.9, 1.0, 1.1],
+                "close": [1.05, 1.15, 1.25],
+                "volume": [10, 20, 30],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -90,34 +96,38 @@ class TestDataServiceLoad:
 
     def test_load_refreshes_aggregate_when_1m_updates(self, tmp_path: Path, caplog) -> None:
         """Aggregates should refresh when base 1m data extends beyond cached range."""
-        base_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-            ],
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [10, 20],
-        })
+        base_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                ],
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [10, 20],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", base_df)
 
         ds = DataService(data_root=tmp_path)
         result = ds.load("oanda", "EUR_USD", "2m")
         assert result.height == 1
 
-        new_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
-            ],
-            "open": [1.2, 1.3],
-            "high": [1.3, 1.4],
-            "low": [1.1, 1.2],
-            "close": [1.25, 1.35],
-            "volume": [30, 40],
-        })
+        new_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+                ],
+                "open": [1.2, 1.3],
+                "high": [1.3, 1.4],
+                "low": [1.1, 1.2],
+                "close": [1.25, 1.35],
+                "volume": [30, 40],
+            }
+        )
         ds.store.write(f"oanda/{key_builder.bars('EUR_USD', '1m')}", new_df, mode="append")
 
         with caplog.at_level(logging.INFO):
@@ -147,8 +157,20 @@ class TestDataServiceList:
     def test_list_symbols_with_data(self, tmp_path: Path) -> None:
         """Test list_symbols returns available data."""
         # Setup: Create test data using ParquetStore
-        write_test_data(tmp_path, "oanda", "EUR_USD", "1m", pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}))
-        write_test_data(tmp_path, "binance", "BTC_USDT", "1h", pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}))
+        write_test_data(
+            tmp_path,
+            "oanda",
+            "EUR_USD",
+            "1m",
+            pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}),
+        )
+        write_test_data(
+            tmp_path,
+            "binance",
+            "BTC_USDT",
+            "1h",
+            pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}),
+        )
 
         ds = DataService(data_root=tmp_path)
         result = ds.list_symbols()
@@ -160,7 +182,13 @@ class TestDataServiceList:
 
     def test_list_symbols_ignores_non_bars(self, tmp_path: Path) -> None:
         """Non-bars keys should not appear in list_symbols output."""
-        write_test_data(tmp_path, "oanda", "EUR_USD", "1m", pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}))
+        write_test_data(
+            tmp_path,
+            "oanda",
+            "EUR_USD",
+            "1m",
+            pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}),
+        )
         store = ParquetStore(str(tmp_path))
         store.write(
             "oanda/EUR_USD/features/test_v1",
@@ -182,8 +210,20 @@ class TestDataServiceList:
     def test_list_symbols_by_provider(self, tmp_path: Path) -> None:
         """Test list_symbols can filter by provider."""
         # Setup: Create test data using ParquetStore
-        write_test_data(tmp_path, "oanda", "EUR_USD", "1m", pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}))
-        write_test_data(tmp_path, "binance", "BTC_USDT", "1m", pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}))
+        write_test_data(
+            tmp_path,
+            "oanda",
+            "EUR_USD",
+            "1m",
+            pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}),
+        )
+        write_test_data(
+            tmp_path,
+            "binance",
+            "BTC_USDT",
+            "1m",
+            pl.DataFrame({"timestamp": [datetime(2024, 1, 1, tzinfo=UTC)], "value": [1.0]}),
+        )
 
         ds = DataService(data_root=tmp_path)
         result = ds.list_symbols(provider="oanda")
@@ -198,14 +238,16 @@ class TestDataServiceFetch:
     def test_fetch_returns_dataframe(self, tmp_path: Path) -> None:
         """Test fetch returns data and stores to file."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
-            "open": [1.0850],
-            "high": [1.0875],
-            "low": [1.0825],
-            "close": [1.0860],
-            "volume": [1000.0],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
+                "open": [1.0850],
+                "high": [1.0875],
+                "low": [1.0825],
+                "close": [1.0860],
+                "volume": [1000.0],
+            }
+        )
         mock_provider.fetch_bars.return_value = mock_df
 
         ds = DataService(data_root=tmp_path)
@@ -226,14 +268,16 @@ class TestDataServiceFetch:
     def test_fetch_with_default_end_date(self, tmp_path: Path) -> None:
         """Test fetch uses today as default end date."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         mock_provider.fetch_bars.return_value = mock_df
 
         ds = DataService(data_root=tmp_path)
@@ -255,14 +299,16 @@ class TestDataServiceFetch:
     def test_fetch_saves_to_store(self, tmp_path: Path) -> None:
         """Test fetch saves data to ParquetStore."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
-            "open": [1.0850],
-            "high": [1.0875],
-            "low": [1.0825],
-            "close": [1.0860],
-            "volume": [1000.0],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
+                "open": [1.0850],
+                "high": [1.0875],
+                "low": [1.0825],
+                "close": [1.0860],
+                "volume": [1000.0],
+            }
+        )
         mock_provider.fetch_bars.return_value = mock_df
 
         ds = DataService(data_root=tmp_path)
@@ -285,14 +331,16 @@ class TestDataServiceFetch:
     def test_fetch_no_save_option(self, tmp_path: Path) -> None:
         """Test fetch can skip saving to store."""
         mock_provider = MagicMock()
-        mock_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        mock_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
         mock_provider.fetch_bars.return_value = mock_df
 
         ds = DataService(data_root=tmp_path)
@@ -317,17 +365,19 @@ class TestDataServiceValidate:
     def test_validate_returns_validation_result(self, tmp_path: Path) -> None:
         """Test validate returns validation result dict."""
         # Setup: Create test data using ParquetStore
-        test_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
-                datetime(2024, 1, 15, 10, 1, tzinfo=UTC),
-            ],
-            "open": [1.0850, 1.0860],
-            "high": [1.0875, 1.0880],
-            "low": [1.0825, 1.0830],
-            "close": [1.0860, 1.0870],
-            "volume": [1000.0, 1100.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                    datetime(2024, 1, 15, 10, 1, tzinfo=UTC),
+                ],
+                "open": [1.0850, 1.0860],
+                "high": [1.0875, 1.0880],
+                "low": [1.0825, 1.0830],
+                "close": [1.0860, 1.0870],
+                "volume": [1000.0, 1100.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -339,14 +389,16 @@ class TestDataServiceValidate:
 
     def test_validate_detects_nulls(self, tmp_path: Path) -> None:
         """Test validate detects null values."""
-        test_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 15, 10, 0, tzinfo=UTC)],
-            "open": [1.0850],
-            "high": [None],  # Null value
-            "low": [1.0825],
-            "close": [1.0860],
-            "volume": [1000.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 15, 10, 0, tzinfo=UTC)],
+                "open": [1.0850],
+                "high": [None],  # Null value
+                "low": [1.0825],
+                "close": [1.0860],
+                "volume": [1000.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -362,14 +414,16 @@ class TestDataServiceValidate:
         """
         # First write some data
         ts = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
-        test_df = pl.DataFrame({
-            "timestamp": [ts, ts],  # Duplicate timestamps
-            "open": [1.0850, 1.0860],
-            "high": [1.0875, 1.0880],
-            "low": [1.0825, 1.0830],
-            "close": [1.0860, 1.0870],
-            "volume": [1000.0, 1100.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [ts, ts],  # Duplicate timestamps
+                "open": [1.0850, 1.0860],
+                "high": [1.0875, 1.0880],
+                "low": [1.0825, 1.0830],
+                "close": [1.0860, 1.0870],
+                "volume": [1000.0, 1100.0],
+            }
+        )
         # Write directly to test duplicate detection (store dedupes, so use raw write)
         data_dir = tmp_path / "oanda" / "EUR_USD" / "bars" / "1m"
         data_dir.mkdir(parents=True)
@@ -383,17 +437,19 @@ class TestDataServiceValidate:
 
     def test_gaps_detection(self, tmp_path: Path) -> None:
         """Test gaps method returns missing intervals."""
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),  # gap at 0:01
-            ],
-            "open": [1.0, 1.0],
-            "high": [1.0, 1.0],
-            "low": [1.0, 1.0],
-            "close": [1.0, 1.0],
-            "volume": [1.0, 1.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 2, tzinfo=UTC),  # gap at 0:01
+                ],
+                "open": [1.0, 1.0],
+                "high": [1.0, 1.0],
+                "low": [1.0, 1.0],
+                "close": [1.0, 1.0],
+                "volume": [1.0, 1.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", df)
 
         ds = DataService(data_root=tmp_path)
@@ -403,30 +459,36 @@ class TestDataServiceValidate:
     def test_backfill_fetches_missing(self, tmp_path: Path) -> None:
         """Backfill should fetch missing ranges only."""
         # existing bar
-        existing = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 0, 0, tzinfo=UTC)],
-            "open": [1.0],
-            "high": [1.0],
-            "low": [1.0],
-            "close": [1.0],
-            "volume": [1.0],
-        })
+        existing = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 0, 0, tzinfo=UTC)],
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", existing)
 
-        fetched = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, 0, 1, tzinfo=UTC)],
-            "open": [1.1],
-            "high": [1.1],
-            "low": [1.1],
-            "close": [1.1],
-            "volume": [1.0],
-        })
+        fetched = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 0, 1, tzinfo=UTC)],
+                "open": [1.1],
+                "high": [1.1],
+                "low": [1.1],
+                "close": [1.1],
+                "volume": [1.0],
+            }
+        )
 
         ds = DataService(data_root=tmp_path)
         mock_provider = MagicMock()
         mock_provider.fetch_bars.return_value = fetched
         with patch.object(ds, "_get_provider", return_value=mock_provider):
-            combined = ds.backfill("oanda", "EUR_USD", start=date(2024, 1, 1), end=date(2024, 1, 1), timeframe="1m")
+            combined = ds.backfill(
+                "oanda", "EUR_USD", start=date(2024, 1, 1), end=date(2024, 1, 1), timeframe="1m"
+            )
 
         assert combined.height == 2
         assert ds.store.exists(f"oanda/{key_builder.bars('EUR_USD', '1m')}")
@@ -439,17 +501,19 @@ class TestDataServiceInfo:
     def test_info_returns_metadata(self, tmp_path: Path) -> None:
         """Test info returns data metadata."""
         # Setup: Create test data using ParquetStore
-        test_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
-                datetime(2024, 1, 15, 10, 1, tzinfo=UTC),
-            ],
-            "open": [1.0850, 1.0860],
-            "high": [1.0875, 1.0880],
-            "low": [1.0825, 1.0830],
-            "close": [1.0860, 1.0870],
-            "volume": [1000.0, 1100.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                    datetime(2024, 1, 15, 10, 1, tzinfo=UTC),
+                ],
+                "open": [1.0850, 1.0860],
+                "high": [1.0875, 1.0880],
+                "low": [1.0825, 1.0830],
+                "close": [1.0860, 1.0870],
+                "volume": [1000.0, 1100.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -469,18 +533,20 @@ class TestDataServiceStats:
     def test_stats_returns_statistics(self, tmp_path: Path) -> None:
         """Test stats returns statistical summary."""
         # Setup: Create test data using ParquetStore
-        test_df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
-                datetime(2024, 1, 15, 10, 1, tzinfo=UTC),
-                datetime(2024, 1, 15, 10, 2, tzinfo=UTC),
-            ],
-            "open": [1.0850, 1.0860, 1.0870],
-            "high": [1.0875, 1.0880, 1.0890],
-            "low": [1.0825, 1.0830, 1.0840],
-            "close": [1.0860, 1.0870, 1.0880],
-            "volume": [1000.0, 1100.0, 1200.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                    datetime(2024, 1, 15, 10, 1, tzinfo=UTC),
+                    datetime(2024, 1, 15, 10, 2, tzinfo=UTC),
+                ],
+                "open": [1.0850, 1.0860, 1.0870],
+                "high": [1.0875, 1.0880, 1.0890],
+                "low": [1.0825, 1.0830, 1.0840],
+                "close": [1.0860, 1.0870, 1.0880],
+                "volume": [1000.0, 1100.0, 1200.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -499,10 +565,12 @@ class TestDataServiceDelete:
     def test_delete_removes_data(self, tmp_path: Path) -> None:
         """Test delete removes data from store."""
         # Setup: Create test data using ParquetStore
-        test_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "value": [1.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "value": [1.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -526,10 +594,12 @@ class TestDataServiceExists:
 
     def test_exists_returns_true_for_existing(self, tmp_path: Path) -> None:
         """Test exists returns True when data exists."""
-        test_df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "value": [1.0],
-        })
+        test_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "value": [1.0],
+            }
+        )
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
@@ -596,17 +666,21 @@ class TestDataServiceExtended:
     def test_fetch_quotes_saved(self, tmp_path: Path) -> None:
         """Quotes fetch should persist when supported."""
         ds = DataService(data_root=tmp_path)
-        quotes = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "bid": [1.0],
-            "ask": [1.1],
-        })
+        quotes = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "bid": [1.0],
+                "ask": [1.1],
+            }
+        )
 
         mock_provider = MagicMock()
         mock_provider.fetch_quotes.return_value = quotes
 
         with patch.object(ds, "_get_provider", return_value=mock_provider):
-            result = ds.fetch_quotes("oanda", "EUR_USD", date(2024, 1, 1), save=True, mode="overwrite")
+            result = ds.fetch_quotes(
+                "oanda", "EUR_USD", date(2024, 1, 1), save=True, mode="overwrite"
+            )
 
         assert result.rows() == quotes.rows()
         assert ds.store.exists("oanda/EUR_USD/quotes")
@@ -631,13 +705,17 @@ class TestDataServiceExtended:
             def fetch_fundamentals(self, symbol: str, as_of: date) -> dict[str, float]:
                 return fundamentals
 
-            def get_corporate_actions(self, symbol: str, start: date, end: date) -> list[dict[str, float]]:
+            def get_corporate_actions(
+                self, symbol: str, start: date, end: date
+            ) -> list[dict[str, float]]:
                 return corp_actions
 
         provider = Provider()
 
         with patch.object(ds, "_get_provider", return_value=provider):
-            fetched_fundamentals = ds.fetch_fundamentals("oanda", "EUR_USD", date(2024, 1, 1), save=True)
+            fetched_fundamentals = ds.fetch_fundamentals(
+                "oanda", "EUR_USD", date(2024, 1, 1), save=True
+            )
             fetched_actions = ds.fetch_corporate_actions(
                 "oanda", "EUR_USD", start=date(2024, 1, 1), end=date(2024, 1, 2), save=True
             )

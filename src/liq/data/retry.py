@@ -137,9 +137,7 @@ def async_retry(
     initial_delay: float = 1.0,
     backoff_multiplier: float = 2.0,
     retryable_exceptions: tuple[type[Exception], ...] = (Exception,),
-) -> Callable[
-    [Callable[P, Coroutine[Any, Any, T]]], Callable[P, Coroutine[Any, Any, T]]
-]:
+) -> Callable[[Callable[P, Coroutine[Any, Any, T]]], Callable[P, Coroutine[Any, Any, T]]]:
     """Async decorator that retries a coroutine with exponential backoff.
 
     The decorator will catch specified exceptions and retry the coroutine

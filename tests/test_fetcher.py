@@ -32,17 +32,19 @@ def sample_bars_df() -> pl.DataFrame:
     """Create a sample bars DataFrame."""
     from datetime import UTC, datetime
 
-    return pl.DataFrame({
-        "timestamp": [
-            datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
-            datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
-        ],
-        "open": [1.0850, 1.0860],
-        "high": [1.0875, 1.0890],
-        "low": [1.0825, 1.0850],
-        "close": [1.0860, 1.0885],
-        "volume": [1000.0, 1500.0],
-    })
+    return pl.DataFrame(
+        {
+            "timestamp": [
+                datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
+            ],
+            "open": [1.0850, 1.0860],
+            "high": [1.0875, 1.0890],
+            "low": [1.0825, 1.0850],
+            "close": [1.0860, 1.0885],
+            "volume": [1000.0, 1500.0],
+        }
+    )
 
 
 class TestDataFetcherCreation:
@@ -59,9 +61,7 @@ class TestDataFetcherCreation:
         assert fetcher.provider is mock_provider
         assert fetcher.store is mock_store
 
-    def test_default_asset_class(
-        self, mock_provider: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_default_asset_class(self, mock_provider: MagicMock, mock_store: MagicMock) -> None:
         """Test default asset_class is forex."""
         fetcher = DataFetcher(provider=mock_provider, store=mock_store)
 

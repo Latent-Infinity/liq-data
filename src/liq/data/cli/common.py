@@ -20,7 +20,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from liq.data.protocols import DataProvider
+from liq.data.protocols import MarketDataProvider
 from liq.data.settings import (
     create_alpaca_provider,
     create_binance_provider,
@@ -45,14 +45,14 @@ def storage_key(provider: str, symbol: str, timeframe: str) -> str:
     return f"{provider}/{key_builder.bars(symbol, timeframe)}"
 
 
-def get_provider(provider_name: str) -> DataProvider:
+def get_provider(provider_name: str) -> MarketDataProvider:
     """Create a data provider instance by name.
 
     Args:
         provider_name: Provider name (oanda, binance, tradestation, coinbase, polygon, alpaca)
 
     Returns:
-        Configured DataProvider instance
+        Configured MarketDataProvider instance
 
     Raises:
         typer.Exit: If provider is unknown or configuration is invalid
@@ -60,17 +60,17 @@ def get_provider(provider_name: str) -> DataProvider:
     try:
         provider_lower = provider_name.lower()
         if provider_lower == "oanda":
-            return cast(DataProvider, create_oanda_provider())
+            return cast(MarketDataProvider, create_oanda_provider())
         elif provider_lower == "binance":
-            return cast(DataProvider, create_binance_provider())
+            return cast(MarketDataProvider, create_binance_provider())
         elif provider_lower == "tradestation":
-            return cast(DataProvider, create_tradestation_provider())
+            return cast(MarketDataProvider, create_tradestation_provider())
         elif provider_lower == "coinbase":
-            return cast(DataProvider, create_coinbase_provider())
+            return cast(MarketDataProvider, create_coinbase_provider())
         elif provider_lower == "polygon":
-            return cast(DataProvider, create_polygon_provider())
+            return cast(MarketDataProvider, create_polygon_provider())
         elif provider_lower == "alpaca":
-            return cast(DataProvider, create_alpaca_provider())
+            return cast(MarketDataProvider, create_alpaca_provider())
         else:
             console.print(f"[red]Unknown provider: {provider_name}[/red]")
             raise typer.Exit(1)
@@ -120,8 +120,7 @@ def parse_source_spec(source: str) -> tuple[str, str]:
     """
     if ":" not in source:
         raise ValueError(
-            f"Invalid source format: '{source}'. "
-            "Expected 'provider:symbol' (e.g., 'oanda:EUR_USD')"
+            f"Invalid source format: '{source}'. Expected 'provider:symbol' (e.g., 'oanda:EUR_USD')"
         )
     parts = source.split(":", 1)
     return parts[0].lower(), parts[1]

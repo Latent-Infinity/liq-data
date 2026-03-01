@@ -14,12 +14,17 @@ app = typer.Typer(help="Commands for fetching and updating market data")
 
 @app.command("fetch")
 def fetch_bars(
-    provider: Annotated[str, typer.Argument(help="Provider: oanda, binance, tradestation, coinbase, polygon, alpaca")],
+    provider: Annotated[
+        str,
+        typer.Argument(help="Provider: oanda, binance, tradestation, coinbase, polygon, alpaca"),
+    ],
     symbol: Annotated[str, typer.Argument(help="Symbol (e.g., EUR_USD, BTC_USDT, AAPL, BTC-USD)")],
     start: Annotated[str, typer.Option("--start", "-s", help="Start date (YYYY-MM-DD)")],
     end: Annotated[str, typer.Option("--end", "-e", help="End date (YYYY-MM-DD)")] = "",
     timeframe: Annotated[str, typer.Option("--timeframe", "-t", help="Timeframe")] = "1m",
-    mode: Annotated[str, typer.Option("--mode", "-m", help="Write mode: append|overwrite")] = "append",
+    mode: Annotated[
+        str, typer.Option("--mode", "-m", help="Write mode: append|overwrite")
+    ] = "append",
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview only, do not save"),
 ) -> None:
     """Fetch bars via DataService (liq-store backed)."""
@@ -27,9 +32,13 @@ def fetch_bars(
     start_date = parse_date(start)
     end_date = parse_date(end) if end else date.today()
 
-    console.print(f"\n[bold blue]Fetching {symbol} from {provider} [{timeframe}] {start_date} -> {end_date}[/bold blue]")
+    console.print(
+        f"\n[bold blue]Fetching {symbol} from {provider} [{timeframe}] {start_date} -> {end_date}[/bold blue]"
+    )
     try:
-        df = ds.fetch(provider, symbol, start_date, end_date, timeframe=timeframe, save=not dry_run, mode=mode)
+        df = ds.fetch(
+            provider, symbol, start_date, end_date, timeframe=timeframe, save=not dry_run, mode=mode
+        )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -61,6 +70,8 @@ def backfill_bars(
     ds = DataService()
     start_date = parse_date(start)
     end_date = parse_date(end)
-    console.print(f"\n[bold blue]Backfilling {symbol} {timeframe} from {start_date} to {end_date}[/bold blue]")
+    console.print(
+        f"\n[bold blue]Backfilling {symbol} {timeframe} from {start_date} to {end_date}[/bold blue]"
+    )
     df = ds.backfill(provider, symbol, start=start_date, end=end_date, timeframe=timeframe)
     console.print(f"[green]Backfill complete. Rows now: {len(df)}[/green]")

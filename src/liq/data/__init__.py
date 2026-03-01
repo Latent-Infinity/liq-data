@@ -17,7 +17,7 @@ from liq.data.exceptions import (
 from liq.data.fetcher import DataFetcher
 from liq.data.forex import detect_gap_policy, normalize_hourly
 from liq.data.instruments import InstrumentSync
-from liq.data.protocols import AsyncDataProvider, DataProvider
+from liq.data.protocols import AsyncMarketDataProvider, MarketDataProvider
 from liq.data.providers import BaseProvider, BinanceProvider, OandaProvider
 from liq.data.retry import async_retry, retry
 from liq.data.service import DataService
@@ -36,8 +36,8 @@ __all__ = [
     "create_oanda_provider",
     "create_binance_provider",
     # Protocols
-    "DataProvider",
-    "AsyncDataProvider",
+    "MarketDataProvider",
+    "AsyncMarketDataProvider",
     # Base classes
     "BaseProvider",
     # Providers
@@ -64,4 +64,4 @@ __all__ = [
     "ConfigurationError",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

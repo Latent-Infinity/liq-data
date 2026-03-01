@@ -35,7 +35,9 @@ def validate_data(
     storage_key = get_storage_key(provider, symbol, timeframe)
     if not store.exists(storage_key):
         console.print(f"[red]Data not found: {provider}/{symbol}/{timeframe}[/red]")
-        console.print(f"[yellow]Run: liq-data fetch {provider} {symbol} --timeframe {timeframe}[/yellow]")
+        console.print(
+            f"[yellow]Run: liq-data fetch {provider} {symbol} --timeframe {timeframe}[/yellow]"
+        )
         raise typer.Exit(1)
 
     console.print(f"\n[bold blue]Validating: {provider}/{symbol}/{timeframe}[/bold blue]\n")
@@ -93,9 +95,9 @@ def validate_data(
     # Check for gaps (forex markets have gaps for weekends which is expected)
     expected_delta = timedelta(minutes=TIMEFRAME_MINUTES.get(timeframe, 1))
 
-    df_with_diff = df_sorted.with_columns([
-        (pl.col("timestamp").diff().dt.total_seconds() / 60).alias("gap_minutes")
-    ])
+    df_with_diff = df_sorted.with_columns(
+        [(pl.col("timestamp").diff().dt.total_seconds() / 60).alias("gap_minutes")]
+    )
 
     # Count gaps > 2x expected (allowing for some tolerance)
     max_expected = expected_delta.total_seconds() / 60 * 2
@@ -110,7 +112,9 @@ def validate_data(
         )
         non_weekend_gaps = len(large_gaps) - len(weekend_gaps)
         if non_weekend_gaps > 0:
-            issues.append(("INFO", "Unexpected gaps", f"{non_weekend_gaps:,} gaps > {max_expected:.0f} min"))
+            issues.append(
+                ("INFO", "Unexpected gaps", f"{non_weekend_gaps:,} gaps > {max_expected:.0f} min")
+            )
 
     # Summary table
     summary = Table(title="Validation Summary")
@@ -186,17 +190,19 @@ def health_report(
             else:
                 status = "[green]Healthy[/green]"
 
-            report_data.append({
-                "provider": prov,
-                "symbol": sym,
-                "timeframe": tf,
-                "bars": len(df),
-                "nulls": null_count,
-                "dups": dup_count,
-                "status": status,
-                "first": str(date_range[0])[:10] if date_range else "N/A",
-                "last": str(date_range[1])[:10] if date_range else "N/A",
-            })
+            report_data.append(
+                {
+                    "provider": prov,
+                    "symbol": sym,
+                    "timeframe": tf,
+                    "bars": len(df),
+                    "nulls": null_count,
+                    "dups": dup_count,
+                    "status": status,
+                    "first": str(date_range[0])[:10] if date_range else "N/A",
+                    "last": str(date_range[1])[:10] if date_range else "N/A",
+                }
+            )
 
         except (pl.exceptions.ComputeError, pl.exceptions.SchemaError, OSError) as e:
             logger.debug("Skipping key %s: %s", key, e)
@@ -288,9 +294,9 @@ def audit_data(
     expected_delta = timedelta(minutes=TIMEFRAME_MINUTES.get(timeframe, 1))
 
     df_sorted = df.sort("timestamp")
-    df_with_diff = df_sorted.with_columns([
-        (pl.col("timestamp").diff().dt.total_seconds() / 60).alias("gap_minutes")
-    ])
+    df_with_diff = df_sorted.with_columns(
+        [(pl.col("timestamp").diff().dt.total_seconds() / 60).alias("gap_minutes")]
+    )
 
     max_expected = expected_delta.total_seconds() / 60 * 2
     gaps = df_with_diff.filter(pl.col("gap_minutes") > max_expected)

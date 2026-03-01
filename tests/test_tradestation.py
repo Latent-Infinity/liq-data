@@ -113,9 +113,7 @@ class TestTradeStationProviderCreation:
                 refresh_token="token",
             )
 
-    def test_supported_timeframes(
-        self, tradestation_provider: TradeStationProvider
-    ) -> None:
+    def test_supported_timeframes(self, tradestation_provider: TradeStationProvider) -> None:
         """Test supported timeframes include standard intervals."""
         timeframes = tradestation_provider.supported_timeframes
         assert "1m" in timeframes
@@ -149,9 +147,7 @@ class TestTradeStationProviderFetchBars:
                 return httpx.Response(200, json=mock_bars_response)
             return httpx.Response(200, json={"Bars": []})
 
-        respx.get(url__regex=r".*/marketdata/barcharts/AAPL.*").mock(
-            side_effect=mock_response
-        )
+        respx.get(url__regex=r".*/marketdata/barcharts/AAPL.*").mock(side_effect=mock_response)
 
         result = tradestation_provider.fetch_bars(
             "AAPL", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
@@ -184,9 +180,7 @@ class TestTradeStationProviderFetchBars:
                 return httpx.Response(200, json=mock_bars_response)
             return httpx.Response(200, json={"Bars": []})
 
-        respx.get(url__regex=r".*/marketdata/barcharts/ESZ24.*").mock(
-            side_effect=mock_response
-        )
+        respx.get(url__regex=r".*/marketdata/barcharts/ESZ24.*").mock(side_effect=mock_response)
 
         result = tradestation_provider.fetch_bars(
             "ESZ24", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
@@ -314,16 +308,12 @@ class TestTradeStationProviderListInstruments:
 class TestTradeStationProviderSymbolNormalization:
     """Tests for symbol normalization."""
 
-    def test_normalize_stock_symbol(
-        self, tradestation_provider: TradeStationProvider
-    ) -> None:
+    def test_normalize_stock_symbol(self, tradestation_provider: TradeStationProvider) -> None:
         """Test stock symbol normalization (should be unchanged)."""
         assert tradestation_provider._normalize_symbol("AAPL") == "AAPL"
         assert tradestation_provider._normalize_symbol("MSFT") == "MSFT"
 
-    def test_normalize_futures_symbol(
-        self, tradestation_provider: TradeStationProvider
-    ) -> None:
+    def test_normalize_futures_symbol(self, tradestation_provider: TradeStationProvider) -> None:
         """Test futures symbol normalization."""
         # Continuous futures symbol
         assert tradestation_provider._normalize_symbol("ES") == "@ES"
@@ -377,9 +367,7 @@ class TestTradeStationProviderPagination:
                 return httpx.Response(200, json=mock_bars_response)
             return httpx.Response(200, json={"Bars": []})
 
-        respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(
-            side_effect=mock_response
-        )
+        respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(side_effect=mock_response)
 
         result = tradestation_provider.fetch_bars(
             "AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1h"

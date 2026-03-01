@@ -207,9 +207,7 @@ class IncrementalUpdater:
 
         if not gaps:
             logger.info("no gaps to fill symbol=%s", symbol)
-            return UpdateResult(
-                symbol=symbol, success=True, gaps_filled=0, total_rows=0
-            )
+            return UpdateResult(symbol=symbol, success=True, gaps_filled=0, total_rows=0)
 
         # Fill each gap
         total_rows = 0
@@ -341,9 +339,7 @@ class IncrementalUpdater:
 
         if start > end:
             logger.info("data already up to date symbol=%s", symbol)
-            return UpdateResult(
-                symbol=symbol, success=True, gaps_filled=0, total_rows=0
-            )
+            return UpdateResult(symbol=symbol, success=True, gaps_filled=0, total_rows=0)
 
         logger.info(
             "updating to now symbol=%s start=%s end=%s",
@@ -410,9 +406,7 @@ class IncrementalUpdater:
         df_sorted = df.sort("timestamp")
 
         # Calculate time differences
-        df_with_diff = df_sorted.with_columns([
-            pl.col("timestamp").diff().alias("_time_diff")
-        ])
+        df_with_diff = df_sorted.with_columns([pl.col("timestamp").diff().alias("_time_diff")])
 
         # Find rows where gap exceeds expected interval (with 10% tolerance)
         tolerance_factor = 1.1
@@ -499,9 +493,7 @@ class IncrementalUpdater:
             or error message on failure.
         """
         if not gaps:
-            return UpdateResult(
-                symbol=symbol, success=True, gaps_filled=0, total_rows=0
-            )
+            return UpdateResult(symbol=symbol, success=True, gaps_filled=0, total_rows=0)
 
         logger.info(
             "starting gap backfill symbol=%s gap_count=%d",
@@ -524,9 +516,7 @@ class IncrementalUpdater:
                     gap_end.isoformat(),
                 )
 
-                rows = self._fetcher.fetch_and_store(
-                    symbol, start_date, end_date, timeframe
-                )
+                rows = self._fetcher.fetch_and_store(symbol, start_date, end_date, timeframe)
                 total_rows += rows
 
             logger.info(

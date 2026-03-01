@@ -16,14 +16,18 @@ def test_rate_limiter_blocks_when_burst_exceeded(monkeypatch) -> None:
     def fake_datetime_now(_tz):
         return fake_now
 
-    monkeypatch.setattr("liq.data.rate_limiter.datetime", type("dt", (), {"now": staticmethod(fake_datetime_now)}))
+    monkeypatch.setattr(
+        "liq.data.rate_limiter.datetime", type("dt", (), {"now": staticmethod(fake_datetime_now)})
+    )
 
     sleep_called = []
 
     def fake_sleep(seconds: float) -> None:
         sleep_called.append(seconds)
 
-    monkeypatch.setattr("liq.data.rate_limiter.time", type("t", (), {"sleep": staticmethod(fake_sleep)}))
+    monkeypatch.setattr(
+        "liq.data.rate_limiter.time", type("t", (), {"sleep": staticmethod(fake_sleep)})
+    )
 
     limiter.acquire()
     limiter.acquire()

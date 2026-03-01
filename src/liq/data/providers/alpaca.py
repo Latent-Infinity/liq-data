@@ -143,17 +143,13 @@ class AlpacaProvider(BaseProvider):
             raise ProviderError(f"Alpaca API request failed: {e}") from e
 
         if response.status_code in (401, 403):
-            raise AuthenticationError(
-                f"Alpaca authentication failed: {response.text}"
-            )
+            raise AuthenticationError(f"Alpaca authentication failed: {response.text}")
 
         if response.status_code == 429:
             raise RateLimitError("Alpaca rate limit exceeded")
 
         if response.status_code != 200:
-            raise ProviderError(
-                f"Alpaca API error: {response.status_code} - {response.text}"
-            )
+            raise ProviderError(f"Alpaca API error: {response.status_code} - {response.text}")
 
         return response.json()
 
@@ -232,14 +228,16 @@ class AlpacaProvider(BaseProvider):
             for bar in bars:
                 # Alpaca timestamps are ISO 8601 format
                 ts = datetime.fromisoformat(bar["t"].replace("Z", "+00:00"))
-                all_bars.append({
-                    "timestamp": ts,
-                    "open": float(bar["o"]),
-                    "high": float(bar["h"]),
-                    "low": float(bar["l"]),
-                    "close": float(bar["c"]),
-                    "volume": float(bar["v"]),
-                })
+                all_bars.append(
+                    {
+                        "timestamp": ts,
+                        "open": float(bar["o"]),
+                        "high": float(bar["h"]),
+                        "low": float(bar["l"]),
+                        "close": float(bar["c"]),
+                        "volume": float(bar["v"]),
+                    }
+                )
 
             # Check for pagination
             page_token = data.get("next_page_token")
@@ -272,14 +270,16 @@ class AlpacaProvider(BaseProvider):
             if asset.get("status") != "active":
                 continue
 
-            all_assets.append({
-                "symbol": asset.get("symbol", ""),
-                "name": asset.get("name", ""),
-                "asset_class": asset.get("class", "us_equity"),
-                "exchange": asset.get("exchange", ""),
-                "tradable": asset.get("tradable", False),
-                "fractionable": asset.get("fractionable", False),
-            })
+            all_assets.append(
+                {
+                    "symbol": asset.get("symbol", ""),
+                    "name": asset.get("name", ""),
+                    "asset_class": asset.get("class", "us_equity"),
+                    "exchange": asset.get("exchange", ""),
+                    "tradable": asset.get("tradable", False),
+                    "fractionable": asset.get("fractionable", False),
+                }
+            )
 
         if not all_assets:
             return pl.DataFrame(

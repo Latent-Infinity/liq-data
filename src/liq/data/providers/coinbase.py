@@ -188,17 +188,13 @@ class CoinbaseProvider(BaseProvider):
             raise ProviderError(f"Coinbase API request failed: {e}") from e
 
         if response.status_code == 401:
-            raise AuthenticationError(
-                f"Coinbase authentication failed: {response.text}"
-            )
+            raise AuthenticationError(f"Coinbase authentication failed: {response.text}")
 
         if response.status_code == 429:
             raise RateLimitError("Coinbase rate limit exceeded")
 
         if response.status_code != 200:
-            raise ProviderError(
-                f"Coinbase API error: {response.status_code} - {response.text}"
-            )
+            raise ProviderError(f"Coinbase API error: {response.status_code} - {response.text}")
 
         return response.json()
 
@@ -262,9 +258,7 @@ class CoinbaseProvider(BaseProvider):
                 "end": current_end.isoformat(),
             }
 
-            data = self._make_request(
-                "GET", f"/products/{api_symbol}/candles", params
-            )
+            data = self._make_request("GET", f"/products/{api_symbol}/candles", params)
 
             if not data:
                 break
@@ -275,14 +269,16 @@ class CoinbaseProvider(BaseProvider):
                 if ts < start_dt or ts > end_dt:
                     continue
 
-                all_bars.append({
-                    "timestamp": ts,
-                    "open": float(candle[3]),
-                    "high": float(candle[2]),
-                    "low": float(candle[1]),
-                    "close": float(candle[4]),
-                    "volume": float(candle[5]),
-                })
+                all_bars.append(
+                    {
+                        "timestamp": ts,
+                        "open": float(candle[3]),
+                        "high": float(candle[2]),
+                        "low": float(candle[1]),
+                        "close": float(candle[4]),
+                        "volume": float(candle[5]),
+                    }
+                )
 
             # Move to next chunk
             current_start = current_end
@@ -313,15 +309,17 @@ class CoinbaseProvider(BaseProvider):
             if product.get("status") != "online":
                 continue
 
-            all_products.append({
-                "symbol": product.get("id", ""),
-                "name": product.get("display_name", ""),
-                "asset_class": "crypto",
-                "exchange": "coinbase",
-                "type": "spot",
-                "base_currency": product.get("base_currency", ""),
-                "quote_currency": product.get("quote_currency", ""),
-            })
+            all_products.append(
+                {
+                    "symbol": product.get("id", ""),
+                    "name": product.get("display_name", ""),
+                    "asset_class": "crypto",
+                    "exchange": "coinbase",
+                    "type": "spot",
+                    "base_currency": product.get("base_currency", ""),
+                    "quote_currency": product.get("quote_currency", ""),
+                }
+            )
 
         if not all_products:
             return pl.DataFrame(

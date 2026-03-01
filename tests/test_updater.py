@@ -27,9 +27,7 @@ def mock_store() -> MagicMock:
 class TestIncrementalUpdaterCreation:
     """Tests for IncrementalUpdater instantiation."""
 
-    def test_create_updater(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_create_updater(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test IncrementalUpdater creation."""
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -40,9 +38,7 @@ class TestIncrementalUpdaterCreation:
         assert updater.fetcher is mock_fetcher
         assert updater.store is mock_store
 
-    def test_default_asset_class(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_default_asset_class(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test default asset_class is forex."""
         updater = IncrementalUpdater(fetcher=mock_fetcher, store=mock_store)
 
@@ -141,9 +137,7 @@ class TestIncrementalUpdaterDetectGaps:
         assert gaps[0][0] == date(2024, 1, 6)
         assert gaps[0][1] == date(2024, 1, 10)
 
-    def test_detect_gaps_both_sides(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_detect_gaps_both_sides(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test gap detection on both sides of existing data."""
         mock_store.get_date_range.return_value = (date(2024, 1, 5), date(2024, 1, 8))
 
@@ -172,9 +166,7 @@ class TestIncrementalUpdaterDetectGaps:
 class TestIncrementalUpdaterUpdate:
     """Tests for IncrementalUpdater.update method."""
 
-    def test_update_no_gaps(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_update_no_gaps(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test update with no gaps returns zero."""
         mock_store.get_date_range.return_value = (date(2024, 1, 1), date(2024, 1, 10))
 
@@ -196,9 +188,7 @@ class TestIncrementalUpdaterUpdate:
         assert result.total_rows == 0
         mock_fetcher.fetch_and_store.assert_not_called()
 
-    def test_update_fills_gaps(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_update_fills_gaps(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test update fills detected gaps."""
         mock_store.get_date_range.return_value = None
         mock_fetcher.fetch_and_store.return_value = 100
@@ -249,9 +239,7 @@ class TestIncrementalUpdaterUpdate:
 class TestIncrementalUpdaterUpdateMultiple:
     """Tests for IncrementalUpdater.update_multiple method."""
 
-    def test_update_multiple_success(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_update_multiple_success(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test update multiple symbols."""
         mock_store.get_date_range.return_value = None
         mock_fetcher.fetch_and_store.return_value = 100
@@ -419,9 +407,7 @@ class TestIncrementalUpdaterUpdateToNow:
 class TestIncrementalUpdaterTimeframeConversion:
     """Tests for timeframe to timedelta conversion."""
 
-    def test_supported_timeframes(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_supported_timeframes(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test all supported timeframes are valid."""
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -433,9 +419,7 @@ class TestIncrementalUpdaterTimeframeConversion:
             delta = updater._timeframe_to_timedelta(tf)
             assert delta is not None
 
-    def test_unsupported_timeframe(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_unsupported_timeframe(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test unsupported timeframe raises ValueError."""
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -464,14 +448,16 @@ class TestDetectInternalGaps:
             datetime(2024, 1, 15, 10, 2),
             datetime(2024, 1, 15, 10, 3),
         ]
-        df = pl.DataFrame({
-            "timestamp": timestamps,
-            "open": [1.0, 1.1, 1.2, 1.3],
-            "high": [1.1, 1.2, 1.3, 1.4],
-            "low": [0.9, 1.0, 1.1, 1.2],
-            "close": [1.05, 1.15, 1.25, 1.35],
-            "volume": [100.0, 200.0, 300.0, 400.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [1.0, 1.1, 1.2, 1.3],
+                "high": [1.1, 1.2, 1.3, 1.4],
+                "low": [0.9, 1.0, 1.1, 1.2],
+                "close": [1.05, 1.15, 1.25, 1.35],
+                "volume": [100.0, 200.0, 300.0, 400.0],
+            }
+        )
 
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -498,14 +484,16 @@ class TestDetectInternalGaps:
             datetime(2024, 1, 15, 10, 4),
             datetime(2024, 1, 15, 10, 5),
         ]
-        df = pl.DataFrame({
-            "timestamp": timestamps,
-            "open": [1.0, 1.1, 1.2, 1.3],
-            "high": [1.1, 1.2, 1.3, 1.4],
-            "low": [0.9, 1.0, 1.1, 1.2],
-            "close": [1.05, 1.15, 1.25, 1.35],
-            "volume": [100.0, 200.0, 300.0, 400.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [1.0, 1.1, 1.2, 1.3],
+                "high": [1.1, 1.2, 1.3, 1.4],
+                "low": [0.9, 1.0, 1.1, 1.2],
+                "close": [1.05, 1.15, 1.25, 1.35],
+                "volume": [100.0, 200.0, 300.0, 400.0],
+            }
+        )
 
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -536,14 +524,16 @@ class TestDetectInternalGaps:
             # Gap 2: 10:5-10:7 missing
             datetime(2024, 1, 15, 10, 8),
         ]
-        df = pl.DataFrame({
-            "timestamp": timestamps,
-            "open": [1.0, 1.1, 1.2, 1.3],
-            "high": [1.1, 1.2, 1.3, 1.4],
-            "low": [0.9, 1.0, 1.1, 1.2],
-            "close": [1.05, 1.15, 1.25, 1.35],
-            "volume": [100.0, 200.0, 300.0, 400.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [1.0, 1.1, 1.2, 1.3],
+                "high": [1.1, 1.2, 1.3, 1.4],
+                "low": [0.9, 1.0, 1.1, 1.2],
+                "close": [1.05, 1.15, 1.25, 1.35],
+                "volume": [100.0, 200.0, 300.0, 400.0],
+            }
+        )
 
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -568,14 +558,16 @@ class TestDetectInternalGaps:
             # Gap: 12:00 missing
             datetime(2024, 1, 15, 13, 0),
         ]
-        df = pl.DataFrame({
-            "timestamp": timestamps,
-            "open": [1.0, 1.1, 1.2],
-            "high": [1.1, 1.2, 1.3],
-            "low": [0.9, 1.0, 1.1],
-            "close": [1.05, 1.15, 1.25],
-            "volume": [100.0, 200.0, 300.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [1.0, 1.1, 1.2],
+                "high": [1.1, 1.2, 1.3],
+                "low": [0.9, 1.0, 1.1],
+                "close": [1.05, 1.15, 1.25],
+                "volume": [100.0, 200.0, 300.0],
+            }
+        )
 
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -603,14 +595,16 @@ class TestDetectInternalGaps:
             # Weekend gap is expected
             datetime(2024, 1, 15, 0, 0),  # Monday midnight
         ]
-        df = pl.DataFrame({
-            "timestamp": timestamps,
-            "open": [1.0, 1.1],
-            "high": [1.1, 1.2],
-            "low": [0.9, 1.0],
-            "close": [1.05, 1.15],
-            "volume": [100.0, 200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [1.0, 1.1],
+                "high": [1.1, 1.2],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100.0, 200.0],
+            }
+        )
 
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -629,14 +623,16 @@ class TestDetectInternalGaps:
         """Test detect_internal_gaps with empty DataFrame."""
         import polars as pl
 
-        df = pl.DataFrame({
-            "timestamp": [],
-            "open": [],
-            "high": [],
-            "low": [],
-            "close": [],
-            "volume": [],
-        }).with_columns(pl.col("timestamp").cast(pl.Datetime))
+        df = pl.DataFrame(
+            {
+                "timestamp": [],
+                "open": [],
+                "high": [],
+                "low": [],
+                "close": [],
+                "volume": [],
+            }
+        ).with_columns(pl.col("timestamp").cast(pl.Datetime))
 
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -655,14 +651,16 @@ class TestDetectInternalGaps:
 
         import polars as pl
 
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 15, 10, 0)],
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 15, 10, 0)],
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100.0],
+            }
+        )
 
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,
@@ -677,9 +675,7 @@ class TestDetectInternalGaps:
 class TestBackfillGaps:
     """Tests for backfilling detected gaps."""
 
-    def test_backfill_single_gap(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_backfill_single_gap(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test backfilling a single gap."""
         from datetime import datetime
 
@@ -699,9 +695,7 @@ class TestBackfillGaps:
         assert result.total_rows == 2
         mock_fetcher.fetch_and_store.assert_called_once()
 
-    def test_backfill_multiple_gaps(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_backfill_multiple_gaps(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test backfilling multiple gaps."""
         from datetime import datetime
 
@@ -724,9 +718,7 @@ class TestBackfillGaps:
         assert result.total_rows == 6  # 3 rows per gap
         assert mock_fetcher.fetch_and_store.call_count == 2
 
-    def test_backfill_no_gaps(
-        self, mock_fetcher: MagicMock, mock_store: MagicMock
-    ) -> None:
+    def test_backfill_no_gaps(self, mock_fetcher: MagicMock, mock_store: MagicMock) -> None:
         """Test backfill with no gaps returns early."""
         updater = IncrementalUpdater(
             fetcher=mock_fetcher,

@@ -35,12 +35,12 @@ class _FakeClient:
 
 
 def test_fetch_binance_system_status(monkeypatch):
-    responses = {
-        "https://api.binance.com/sapi/v1/system/status": {"status": 0, "msg": "ok"}
-    }
+    responses = {"https://api.binance.com/sapi/v1/system/status": {"status": 0, "msg": "ok"}}
 
     # inject responses into fake client construction
-    monkeypatch.setattr(bs, "httpx", SimpleNamespace(Client=lambda **kwargs: _FakeClient(responses)))
+    monkeypatch.setattr(
+        bs, "httpx", SimpleNamespace(Client=lambda **kwargs: _FakeClient(responses))
+    )
 
     result = bs.fetch_binance_system_status()
 
@@ -65,7 +65,9 @@ def test_fetch_binance_announcements(monkeypatch):
     }
     responses = {"https://status.binance.com/status/spot/history": announcements}
 
-    monkeypatch.setattr(bs, "httpx", SimpleNamespace(Client=lambda **kwargs: _FakeClient(responses)))
+    monkeypatch.setattr(
+        bs, "httpx", SimpleNamespace(Client=lambda **kwargs: _FakeClient(responses))
+    )
 
     result = bs.fetch_binance_announcements(limit=10)
 

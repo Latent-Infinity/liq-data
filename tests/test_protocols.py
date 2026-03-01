@@ -4,42 +4,42 @@ from datetime import date
 
 import polars as pl
 
-from liq.data.protocols import AsyncDataProvider, DataProvider
+from liq.data.protocols import AsyncMarketDataProvider, MarketDataProvider
 from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE
 
 
-class TestDataProviderProtocol:
-    """Tests for DataProvider protocol."""
+class TestMarketDataProviderProtocol:
+    """Tests for MarketDataProvider protocol."""
 
     def test_protocol_is_runtime_checkable(self) -> None:
         """Protocol should be runtime checkable."""
-        assert hasattr(DataProvider, "__protocol_attrs__") or isinstance(DataProvider, type)
+        assert hasattr(MarketDataProvider, "__protocol_attrs__") or isinstance(MarketDataProvider, type)
 
     def test_protocol_defines_name(self) -> None:
         """Protocol should define name property."""
-        assert hasattr(DataProvider, "name")
+        assert hasattr(MarketDataProvider, "name")
 
     def test_protocol_defines_fetch_bars(self) -> None:
         """Protocol should define fetch_bars method."""
-        assert hasattr(DataProvider, "fetch_bars")
+        assert hasattr(MarketDataProvider, "fetch_bars")
 
     def test_protocol_defines_list_instruments(self) -> None:
         """Protocol should define list_instruments method."""
-        assert hasattr(DataProvider, "list_instruments")
+        assert hasattr(MarketDataProvider, "list_instruments")
 
     def test_protocol_defines_extended_surface(self) -> None:
         """Protocol should define extended PRD methods."""
-        assert hasattr(DataProvider, "get_instrument")
-        assert hasattr(DataProvider, "fetch_quotes")
-        assert hasattr(DataProvider, "fetch_fundamentals")
-        assert hasattr(DataProvider, "get_corporate_actions")
-        assert hasattr(DataProvider, "get_universe")
-        assert hasattr(DataProvider, "fetch_instruments")
-        assert hasattr(DataProvider, "validate_credentials")
-        assert hasattr(DataProvider, "supported_asset_classes")
+        assert hasattr(MarketDataProvider, "get_instrument")
+        assert hasattr(MarketDataProvider, "fetch_quotes")
+        assert hasattr(MarketDataProvider, "fetch_fundamentals")
+        assert hasattr(MarketDataProvider, "get_corporate_actions")
+        assert hasattr(MarketDataProvider, "get_universe")
+        assert hasattr(MarketDataProvider, "fetch_instruments")
+        assert hasattr(MarketDataProvider, "validate_credentials")
+        assert hasattr(MarketDataProvider, "supported_asset_classes")
 
 
-class MockDataProvider:
+class MockMarketDataProvider:
     """Mock implementation for testing protocol conformance."""
 
     def __init__(self) -> None:
@@ -104,73 +104,71 @@ class MockDataProvider:
         return [{"symbol": "EUR_USD"}]
 
 
-class TestMockDataProvider:
+class TestMockMarketDataProvider:
     """Tests for mock implementation to verify protocol works."""
 
     def test_mock_implements_protocol(self) -> None:
         """Mock should satisfy the protocol structure."""
-        provider = MockDataProvider()
-        assert isinstance(provider, DataProvider)
+        provider = MockMarketDataProvider()
+        assert isinstance(provider, MarketDataProvider)
 
     def test_mock_name(self) -> None:
-        provider = MockDataProvider()
+        provider = MockMarketDataProvider()
         assert provider.name == "mock_provider"
 
     def test_mock_fetch_bars_returns_dataframe(self) -> None:
-        provider = MockDataProvider()
+        provider = MockMarketDataProvider()
         result = provider.fetch_bars("EUR_USD", date(2024, 1, 1), date(2024, 1, 31))
         assert isinstance(result, pl.DataFrame)
 
     def test_mock_list_instruments_returns_dataframe(self) -> None:
-        provider = MockDataProvider()
+        provider = MockMarketDataProvider()
         result = provider.list_instruments()
         assert isinstance(result, pl.DataFrame)
         assert len(result) == 2
 
     def test_mock_get_instrument_returns_dict(self) -> None:
-        provider = MockDataProvider()
+        provider = MockMarketDataProvider()
         result = provider.get_instrument("EUR_USD")
         assert result is not None
         assert result["symbol"] == "EUR_USD"
 
     def test_mock_get_instrument_returns_none_for_unknown(self) -> None:
-        provider = MockDataProvider()
+        provider = MockMarketDataProvider()
         result = provider.get_instrument("UNKNOWN")
         assert result is None
 
     def test_mock_supports_extended_methods(self) -> None:
-        provider = MockDataProvider()
+        provider = MockMarketDataProvider()
         assert provider.validate_credentials()
         assert provider.supported_asset_classes == ["forex"]
         assert provider.fetch_quotes("EUR_USD", date(2024, 1, 1), date(2024, 1, 2)).is_empty()
 
 
-class TestAsyncDataProviderProtocol:
-    """Tests for AsyncDataProvider protocol."""
+class TestAsyncMarketDataProviderProtocol:
+    """Tests for AsyncMarketDataProvider protocol."""
 
     def test_async_protocol_is_runtime_checkable(self) -> None:
         """Async protocol should be runtime checkable."""
-        assert hasattr(AsyncDataProvider, "__protocol_attrs__") or isinstance(
-            AsyncDataProvider, type
-        )
+        assert hasattr(AsyncMarketDataProvider, "__protocol_attrs__") or isinstance(AsyncMarketDataProvider, type)
 
     def test_async_protocol_defines_name(self) -> None:
         """Async protocol should define name property."""
-        assert hasattr(AsyncDataProvider, "name")
+        assert hasattr(AsyncMarketDataProvider, "name")
 
     def test_async_protocol_defines_fetch_bars(self) -> None:
         """Async protocol should define fetch_bars method."""
-        assert hasattr(AsyncDataProvider, "fetch_bars")
+        assert hasattr(AsyncMarketDataProvider, "fetch_bars")
 
     def test_async_protocol_defines_list_instruments(self) -> None:
         """Async protocol should define list_instruments method."""
-        assert hasattr(AsyncDataProvider, "list_instruments")
+        assert hasattr(AsyncMarketDataProvider, "list_instruments")
 
     def test_async_protocol_defines_extended_surface(self) -> None:
-        assert hasattr(AsyncDataProvider, "fetch_quotes")
-        assert hasattr(AsyncDataProvider, "fetch_fundamentals")
-        assert hasattr(AsyncDataProvider, "get_corporate_actions")
-        assert hasattr(AsyncDataProvider, "get_universe")
-        assert hasattr(AsyncDataProvider, "fetch_instruments")
-        assert hasattr(AsyncDataProvider, "validate_credentials")
-        assert hasattr(AsyncDataProvider, "supported_asset_classes")
+        assert hasattr(AsyncMarketDataProvider, "fetch_quotes")
+        assert hasattr(AsyncMarketDataProvider, "fetch_fundamentals")
+        assert hasattr(AsyncMarketDataProvider, "get_corporate_actions")
+        assert hasattr(AsyncMarketDataProvider, "get_universe")
+        assert hasattr(AsyncMarketDataProvider, "fetch_instruments")
+        assert hasattr(AsyncMarketDataProvider, "validate_credentials")
+        assert hasattr(AsyncMarketDataProvider, "supported_asset_classes")

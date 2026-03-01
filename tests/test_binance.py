@@ -137,9 +137,7 @@ class TestBinanceProviderFetchBars:
                 return httpx.Response(200, json=mock_klines_response)
             return httpx.Response(200, json=[])
 
-        route = respx.get("https://api.binance.com/api/v3/klines").mock(
-            side_effect=mock_response
-        )
+        route = respx.get("https://api.binance.com/api/v3/klines").mock(side_effect=mock_response)
 
         binance_provider.fetch_bars(
             "BTC_USDT", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
@@ -241,16 +239,12 @@ class TestBinanceProviderListInstruments:
 
         assert len(result) == 2
 
-    def test_list_instruments_invalid_asset_class(
-        self, binance_provider: BinanceProvider
-    ) -> None:
+    def test_list_instruments_invalid_asset_class(self, binance_provider: BinanceProvider) -> None:
         with pytest.raises(ProviderError, match="Binance only supports crypto"):
             binance_provider.list_instruments(asset_class="forex")
 
     @respx.mock
-    def test_list_instruments_rate_limit_error(
-        self, binance_provider: BinanceProvider
-    ) -> None:
+    def test_list_instruments_rate_limit_error(self, binance_provider: BinanceProvider) -> None:
         respx.get("https://api.binance.com/api/v3/exchangeInfo").mock(
             return_value=httpx.Response(429, json={"msg": "Rate limit"})
         )
@@ -263,9 +257,7 @@ class TestBinanceProviderValidateCredentials:
     """Tests for BinanceProvider.validate_credentials method."""
 
     @respx.mock
-    def test_validate_credentials_success(
-        self, binance_provider: BinanceProvider
-    ) -> None:
+    def test_validate_credentials_success(self, binance_provider: BinanceProvider) -> None:
         respx.get("https://api.binance.com/api/v3/exchangeInfo").mock(
             return_value=httpx.Response(200, json={"symbols": []})
         )
@@ -273,9 +265,7 @@ class TestBinanceProviderValidateCredentials:
         assert binance_provider.validate_credentials() is True
 
     @respx.mock
-    def test_validate_credentials_failure(
-        self, binance_provider: BinanceProvider
-    ) -> None:
+    def test_validate_credentials_failure(self, binance_provider: BinanceProvider) -> None:
         respx.get("https://api.binance.com/api/v3/exchangeInfo").mock(
             return_value=httpx.Response(500, json={"msg": "Internal error"})
         )
@@ -283,9 +273,7 @@ class TestBinanceProviderValidateCredentials:
         assert binance_provider.validate_credentials() is False
 
     @respx.mock
-    def test_validate_credentials_network_error(
-        self, binance_provider: BinanceProvider
-    ) -> None:
+    def test_validate_credentials_network_error(self, binance_provider: BinanceProvider) -> None:
         respx.get("https://api.binance.com/api/v3/exchangeInfo").mock(
             side_effect=httpx.ConnectError("Connection failed")
         )

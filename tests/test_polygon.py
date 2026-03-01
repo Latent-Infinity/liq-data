@@ -226,9 +226,7 @@ class TestPolygonProviderAuthentication:
             return_value=httpx.Response(200, json=empty_response)
         )
 
-        polygon_provider.fetch_bars(
-            "AAPL", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h"
-        )
+        polygon_provider.fetch_bars("AAPL", date(2024, 1, 15), date(2024, 1, 15), timeframe="1h")
 
         assert route.called
         request = route.calls[0].request
@@ -348,16 +346,12 @@ class TestPolygonProviderListInstruments:
 class TestPolygonProviderSymbolNormalization:
     """Tests for symbol normalization."""
 
-    def test_normalize_symbol_uppercase(
-        self, polygon_provider: PolygonProvider
-    ) -> None:
+    def test_normalize_symbol_uppercase(self, polygon_provider: PolygonProvider) -> None:
         """Test symbol is uppercased."""
         assert polygon_provider._normalize_symbol("aapl") == "AAPL"
         assert polygon_provider._normalize_symbol("msft") == "MSFT"
 
-    def test_normalize_symbol_already_uppercase(
-        self, polygon_provider: PolygonProvider
-    ) -> None:
+    def test_normalize_symbol_already_uppercase(self, polygon_provider: PolygonProvider) -> None:
         """Test already uppercase symbol is unchanged."""
         assert polygon_provider._normalize_symbol("AAPL") == "AAPL"
         assert polygon_provider._normalize_symbol("GOOGL") == "GOOGL"
@@ -437,9 +431,7 @@ class TestPolygonProviderPagination:
                 return httpx.Response(200, json=first_response)
             return httpx.Response(200, json=second_response)
 
-        respx.get(url__regex=r".*/v2/aggs/ticker/AAPL/range/.*").mock(
-            side_effect=mock_response
-        )
+        respx.get(url__regex=r".*/v2/aggs/ticker/AAPL/range/.*").mock(side_effect=mock_response)
         respx.get(url__regex=r".*/v2/aggs/ticker/AAPL/range/next.*").mock(
             return_value=httpx.Response(200, json=second_response)
         )

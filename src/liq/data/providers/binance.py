@@ -233,14 +233,16 @@ class BinanceProvider(BaseProvider):
                 if k[i] is None:
                     raise ValidationError(f"Missing {field} at {timestamp.isoformat()}")
 
-            bars.append({
-                "timestamp": timestamp,
-                "open": float(k[1]),
-                "high": float(k[2]),
-                "low": float(k[3]),
-                "close": float(k[4]),
-                "volume": float(k[5]),
-            })
+            bars.append(
+                {
+                    "timestamp": timestamp,
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                }
+            )
 
         return bars
 
@@ -279,14 +281,16 @@ class BinanceProvider(BaseProvider):
                 quote = symbol_info.get("quoteAsset", "")
                 canonical_symbol = f"{base}_{quote}"
 
-                instruments.append({
-                    "symbol": canonical_symbol,
-                    "name": f"{base}/{quote}",
-                    "asset_class": "crypto",
-                    "base_currency": base,
-                    "quote_currency": quote,
-                    "status": symbol_info.get("status", ""),
-                })
+                instruments.append(
+                    {
+                        "symbol": canonical_symbol,
+                        "name": f"{base}/{quote}",
+                        "asset_class": "crypto",
+                        "base_currency": base,
+                        "quote_currency": quote,
+                        "status": symbol_info.get("status", ""),
+                    }
+                )
 
             return pl.DataFrame(instruments)
 

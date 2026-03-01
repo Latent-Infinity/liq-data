@@ -22,7 +22,12 @@ app = typer.Typer()
 
 @app.command("list")
 def list_instruments(
-    provider: Annotated[str, typer.Argument(help="Provider: 'oanda', 'binance', 'tradestation', 'coinbase', 'polygon', or 'alpaca'")],
+    provider: Annotated[
+        str,
+        typer.Argument(
+            help="Provider: 'oanda', 'binance', 'tradestation', 'coinbase', 'polygon', or 'alpaca'"
+        ),
+    ],
     asset_class: Annotated[
         str | None, typer.Option("--asset-class", "-a", help="Filter by asset class")
     ] = None,
@@ -83,10 +88,20 @@ def show_config() -> None:
     table.add_row("OANDA Environment", _render(settings.oanda_environment, "[red]Not set[/red]"))
     table.add_row("Binance API Key", _mask(settings.binance_api_key, "[dim]Not set[/dim]"))
     table.add_row("Binance Use US", _render(settings.binance_use_us, "[dim]Not set[/dim]"))
-    table.add_row("TradeStation Client ID", _mask(settings.tradestation_client_id, "[dim]Not set[/dim]"))
-    table.add_row("TradeStation Refresh Token", _mask(settings.tradestation_refresh_token, "[dim]Not set[/dim]"))
-    table.add_row("TradeStation Redirect URI", _render(settings.tradestation_redirect_uri, "[dim]Not set[/dim]"))
-    table.add_row("TradeStation Scopes", _render(settings.tradestation_scopes, "[dim]Not set[/dim]"))
+    table.add_row(
+        "TradeStation Client ID", _mask(settings.tradestation_client_id, "[dim]Not set[/dim]")
+    )
+    table.add_row(
+        "TradeStation Refresh Token",
+        _mask(settings.tradestation_refresh_token, "[dim]Not set[/dim]"),
+    )
+    table.add_row(
+        "TradeStation Redirect URI",
+        _render(settings.tradestation_redirect_uri, "[dim]Not set[/dim]"),
+    )
+    table.add_row(
+        "TradeStation Scopes", _render(settings.tradestation_scopes, "[dim]Not set[/dim]")
+    )
     table.add_row(
         "TradeStation Persist Refresh Token",
         _render(settings.tradestation_persist_refresh_token, "[dim]Not set[/dim]"),
@@ -107,9 +122,7 @@ def show_data_info(
     provider: Annotated[
         str | None, typer.Argument(help="Provider (e.g., 'oanda', 'binance')")
     ] = None,
-    symbol: Annotated[
-        str | None, typer.Argument(help="Symbol (e.g., 'EUR_USD')")
-    ] = None,
+    symbol: Annotated[str | None, typer.Argument(help="Symbol (e.g., 'EUR_USD')")] = None,
     timeframe: Annotated[str, typer.Option("--timeframe", "-t", help="Timeframe")] = "1m",
 ) -> None:
     """Show information about available data.
@@ -125,7 +138,9 @@ def show_data_info(
         storage_key = get_storage_key(provider, symbol, timeframe)
         if not store.exists(storage_key):
             console.print(f"[red]Data not found: {storage_key}[/red]")
-            console.print(f"[yellow]Run: liq-data fetch {provider} {symbol} --timeframe {timeframe}[/yellow]")
+            console.print(
+                f"[yellow]Run: liq-data fetch {provider} {symbol} --timeframe {timeframe}[/yellow]"
+            )
             raise typer.Exit(1)
         _show_symbol_info(store, storage_key, provider, symbol, timeframe)
         return
@@ -225,7 +240,9 @@ def show_stats(
     storage_key = get_storage_key(provider, symbol, timeframe)
     if not store.exists(storage_key):
         console.print(f"[red]Data not found: {provider}/{symbol}/{timeframe}[/red]")
-        console.print(f"[yellow]Run: liq-data fetch {provider} {symbol} --timeframe {timeframe}[/yellow]")
+        console.print(
+            f"[yellow]Run: liq-data fetch {provider} {symbol} --timeframe {timeframe}[/yellow]"
+        )
         raise typer.Exit(1)
 
     console.print(f"\n[bold blue]Statistics: {provider}/{symbol}/{timeframe}[/bold blue]\n")
@@ -271,15 +288,18 @@ def show_stats(
     time_table.add_row("Last Bar", str(df["timestamp"].max()))
 
     # Calculate coverage by year
-    df_years = df.with_columns([
-        pl.col("timestamp").dt.year().alias("year")
-    ]).group_by("year").agg(pl.len().alias("count"))
+    df_years = (
+        df.with_columns([pl.col("timestamp").dt.year().alias("year")])
+        .group_by("year")
+        .agg(pl.len().alias("count"))
+    )
 
-    years_str = ", ".join([
-        f"{row['year']}: {row['count']:,}"
-        for row in df_years.sort("year").iter_rows(named=True)
-    ])
-    time_table.add_row("Bars by Year", years_str[:100] + "..." if len(years_str) > 100 else years_str)
+    years_str = ", ".join(
+        [f"{row['year']}: {row['count']:,}" for row in df_years.sort("year").iter_rows(named=True)]
+    )
+    time_table.add_row(
+        "Bars by Year", years_str[:100] + "..." if len(years_str) > 100 else years_str
+    )
 
     console.print(time_table)
 

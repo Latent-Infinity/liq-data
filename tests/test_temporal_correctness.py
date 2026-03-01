@@ -25,18 +25,20 @@ class TestTimestampOrdering:
     def test_qa_sorted_data_is_monotonic(self) -> None:
         """QA should show 0 non-monotonic after sorting."""
         # Even if input is out of order, after sorting it should be monotonic
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
-            ],
-            "open": [100.0, 101.0, 102.0],
-            "high": [105.0, 106.0, 107.0],
-            "low": [95.0, 96.0, 97.0],
-            "close": [102.0, 103.0, 104.0],
-            "volume": [1000.0, 1100.0, 1200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+                ],
+                "open": [100.0, 101.0, 102.0],
+                "high": [105.0, 106.0, 107.0],
+                "low": [95.0, 96.0, 97.0],
+                "close": [102.0, 103.0, 104.0],
+                "volume": [1000.0, 1100.0, 1200.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -45,18 +47,20 @@ class TestTimestampOrdering:
 
     def test_qa_accepts_monotonic_timestamps(self) -> None:
         """QA should pass for correctly ordered timestamps."""
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
-            ],
-            "open": [100.0, 101.0, 102.0],
-            "high": [105.0, 106.0, 107.0],
-            "low": [95.0, 96.0, 97.0],
-            "close": [102.0, 103.0, 104.0],
-            "volume": [1000.0, 1100.0, 1200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+                ],
+                "open": [100.0, 101.0, 102.0],
+                "high": [105.0, 106.0, 107.0],
+                "low": [95.0, 96.0, 97.0],
+                "close": [102.0, 103.0, 104.0],
+                "volume": [1000.0, 1100.0, 1200.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -64,18 +68,20 @@ class TestTimestampOrdering:
 
     def test_qa_handles_duplicate_timestamps(self) -> None:
         """QA should not flag duplicate timestamps as non-monotonic."""
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),  # Duplicate
-                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
-            ],
-            "open": [100.0, 100.0, 102.0],
-            "high": [105.0, 105.0, 107.0],
-            "low": [95.0, 95.0, 97.0],
-            "close": [102.0, 102.0, 104.0],
-            "volume": [1000.0, 1000.0, 1200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),  # Duplicate
+                    datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                ],
+                "open": [100.0, 100.0, 102.0],
+                "high": [105.0, 105.0, 107.0],
+                "low": [95.0, 95.0, 97.0],
+                "close": [102.0, 102.0, 104.0],
+                "volume": [1000.0, 1000.0, 1200.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -134,14 +140,16 @@ class TestOHLCIntegrity:
 
     def test_qa_detects_high_less_than_open(self) -> None:
         """QA should detect when high < open."""
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [100.0],
-            "high": [99.0],  # Invalid: high < open
-            "low": [95.0],
-            "close": [98.0],
-            "volume": [1000.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [100.0],
+                "high": [99.0],  # Invalid: high < open
+                "low": [95.0],
+                "close": [98.0],
+                "volume": [1000.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -149,14 +157,16 @@ class TestOHLCIntegrity:
 
     def test_qa_detects_high_less_than_close(self) -> None:
         """QA should detect when high < close."""
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [100.0],
-            "high": [101.0],
-            "low": [95.0],
-            "close": [102.0],  # Invalid: close > high
-            "volume": [1000.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [100.0],
+                "high": [101.0],
+                "low": [95.0],
+                "close": [102.0],  # Invalid: close > high
+                "volume": [1000.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -164,14 +174,16 @@ class TestOHLCIntegrity:
 
     def test_qa_detects_low_greater_than_open(self) -> None:
         """QA should detect when low > open."""
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [100.0],
-            "high": [105.0],
-            "low": [101.0],  # Invalid: low > open
-            "close": [102.0],
-            "volume": [1000.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [100.0],
+                "high": [105.0],
+                "low": [101.0],  # Invalid: low > open
+                "close": [102.0],
+                "volume": [1000.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -179,14 +191,16 @@ class TestOHLCIntegrity:
 
     def test_qa_detects_low_greater_than_close(self) -> None:
         """QA should detect when low > close."""
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [100.0],
-            "high": [105.0],
-            "low": [99.0],
-            "close": [98.0],  # Invalid: close < low
-            "volume": [1000.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [100.0],
+                "high": [105.0],
+                "low": [99.0],
+                "close": [98.0],  # Invalid: close < low
+                "volume": [1000.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -194,14 +208,16 @@ class TestOHLCIntegrity:
 
     def test_qa_detects_high_less_than_low(self) -> None:
         """QA should detect when high < low."""
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [100.0],
-            "high": [95.0],  # Invalid: high < low
-            "low": [99.0],
-            "close": [97.0],
-            "volume": [1000.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [100.0],
+                "high": [95.0],  # Invalid: high < low
+                "low": [99.0],
+                "close": [97.0],
+                "volume": [1000.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -209,14 +225,16 @@ class TestOHLCIntegrity:
 
     def test_qa_passes_valid_ohlc(self) -> None:
         """QA should pass for valid OHLC data."""
-        df = pl.DataFrame({
-            "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
-            "open": [100.0],
-            "high": [105.0],
-            "low": [95.0],
-            "close": [102.0],
-            "volume": [1000.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+                "open": [100.0],
+                "high": [105.0],
+                "low": [95.0],
+                "close": [102.0],
+                "volume": [1000.0],
+            }
+        )
 
         qa = run_bar_qa(df)
 
@@ -228,19 +246,21 @@ class TestGapClassification:
 
     def test_gaps_detects_missing_bar(self) -> None:
         """Should detect gap when bar is missing."""
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-                # 0:02 is missing
-                datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
-            ],
-            "open": [100.0, 101.0, 102.0],
-            "high": [105.0, 106.0, 107.0],
-            "low": [95.0, 96.0, 97.0],
-            "close": [102.0, 103.0, 104.0],
-            "volume": [1000.0, 1100.0, 1200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                    # 0:02 is missing
+                    datetime(2024, 1, 1, 0, 3, tzinfo=UTC),
+                ],
+                "open": [100.0, 101.0, 102.0],
+                "high": [105.0, 106.0, 107.0],
+                "low": [95.0, 96.0, 97.0],
+                "close": [102.0, 103.0, 104.0],
+                "volume": [1000.0, 1100.0, 1200.0],
+            }
+        )
 
         policy = GapPolicy(expected_gap_minutes=1)
         result = classify_gaps(df, policy)
@@ -251,18 +271,20 @@ class TestGapClassification:
 
     def test_gaps_accepts_on_schedule(self) -> None:
         """Should accept bars that arrive on schedule."""
-        df = pl.DataFrame({
-            "timestamp": [
-                datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
-                datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
-            ],
-            "open": [100.0, 101.0, 102.0],
-            "high": [105.0, 106.0, 107.0],
-            "low": [95.0, 96.0, 97.0],
-            "close": [102.0, 103.0, 104.0],
-            "volume": [1000.0, 1100.0, 1200.0],
-        })
+        df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 0, 0, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 1, tzinfo=UTC),
+                    datetime(2024, 1, 1, 0, 2, tzinfo=UTC),
+                ],
+                "open": [100.0, 101.0, 102.0],
+                "high": [105.0, 106.0, 107.0],
+                "low": [95.0, 96.0, 97.0],
+                "close": [102.0, 103.0, 104.0],
+                "volume": [1000.0, 1100.0, 1200.0],
+            }
+        )
 
         policy = GapPolicy(expected_gap_minutes=1)
         result = classify_gaps(df, policy)
@@ -274,14 +296,16 @@ class TestGapClassification:
 
     def test_gaps_empty_dataframe(self) -> None:
         """Should handle empty DataFrame."""
-        df = pl.DataFrame(schema={
-            "timestamp": pl.Datetime("us", "UTC"),
-            "open": pl.Float64,
-            "high": pl.Float64,
-            "low": pl.Float64,
-            "close": pl.Float64,
-            "volume": pl.Float64,
-        })
+        df = pl.DataFrame(
+            schema={
+                "timestamp": pl.Datetime("us", "UTC"),
+                "open": pl.Float64,
+                "high": pl.Float64,
+                "low": pl.Float64,
+                "close": pl.Float64,
+                "volume": pl.Float64,
+            }
+        )
 
         policy = GapPolicy(expected_gap_minutes=1)
         result = classify_gaps(df, policy)

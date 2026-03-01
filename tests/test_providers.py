@@ -105,9 +105,7 @@ class TestBaseProviderFetchBars:
     def test_fetch_bars_validates_timeframe(self) -> None:
         provider = ConcreteProvider()
         with pytest.raises(ProviderError, match="Unsupported timeframe"):
-            provider.fetch_bars(
-                "EUR_USD", date(2024, 1, 1), date(2024, 1, 31), timeframe="invalid"
-            )
+            provider.fetch_bars("EUR_USD", date(2024, 1, 1), date(2024, 1, 31), timeframe="invalid")
 
 
 class TestBaseProviderInstruments:

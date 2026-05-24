@@ -43,8 +43,13 @@ def run_bar_qa(df: pl.DataFrame) -> QAResult:
         | (pl.col("low") > pl.col("close"))
         | (pl.col("high") < pl.col("low"))
     ).height
+    # Guard the denominator: a prior close of exactly 0 (legitimate for macro
+    # series that cross zero) makes the return undefined. Polars Decimal
+    # division-by-zero *raises*; when/then does not short-circuit, so null the
+    # denominator before dividing (division by null propagates to null).
+    _safe_prev = pl.when(pl.col("close").shift(1) != 0).then(pl.col("close").shift(1))
     extreme_moves = (
-        df.with_columns((pl.col("close") / pl.col("close").shift(1) - 1).alias("ret"))
+        df.with_columns((pl.col("close") / _safe_prev - 1).alias("ret"))
         .filter(pl.col("ret").abs() > 0.1)
         .height
     )
@@ -86,8 +91,11 @@ def _check_ohlc_constraints(df: pl.DataFrame) -> list[str]:
 def _check_spikes(df: pl.DataFrame, threshold: float = 0.2) -> list[str]:
     if "close" not in df.columns:
         return []
+    # Guard the denominator (see run_bar_qa): undefined when prior close is 0.
+    prev_close = pl.col("close").shift(1)
+    safe_prev = pl.when(prev_close != 0).then(prev_close)
     spikes = df.with_columns(
-        ((pl.col("close") - pl.col("close").shift(1)).abs() / pl.col("close").shift(1)).alias("pct")
+        ((pl.col("close") - prev_close).abs() / safe_prev).alias("pct")
     )
     if spikes.filter(pl.col("pct") > threshold).is_empty():
         return []

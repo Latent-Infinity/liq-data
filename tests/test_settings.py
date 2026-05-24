@@ -22,6 +22,9 @@ from liq.data.settings import (
     list_available_data,
     load_symbol_data,
 )
+from liq.data.settings import (
+    persist_env_value as real_persist_env_value,
+)
 from liq.store.parquet import ParquetStore
 
 
@@ -329,6 +332,35 @@ class TestCreateAlpacaProvider:
         assert provider.name == "alpaca"
         assert provider._api_key == "test_key"
         assert provider._api_secret == "test_secret"
+
+
+class TestPersistEnvValue:
+    """Tests for the real persistence helper using only temp files."""
+
+    def test_adds_key_to_new_env_file(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+
+        real_persist_env_value("TRADESTATION_REFRESH_TOKEN", "new-token", env_path=env_path)
+
+        assert env_path.read_text(encoding="utf-8") == "TRADESTATION_REFRESH_TOKEN=new-token\n"
+
+    def test_updates_existing_key_preserving_other_lines(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text("A=1\nTRADESTATION_REFRESH_TOKEN=old-token\nB=2\n", encoding="utf-8")
+
+        real_persist_env_value("TRADESTATION_REFRESH_TOKEN", "new-token", env_path=env_path)
+
+        assert env_path.read_text(encoding="utf-8") == (
+            "A=1\nTRADESTATION_REFRESH_TOKEN=new-token\nB=2\n"
+        )
+
+    def test_appends_key_after_blank_separator(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text("A=1\n", encoding="utf-8")
+
+        real_persist_env_value("B", "2", env_path=env_path)
+
+        assert env_path.read_text(encoding="utf-8") == "A=1\n\nB=2\n"
 
 
 class TestGetStorageKey:

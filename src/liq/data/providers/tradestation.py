@@ -14,6 +14,7 @@ Features:
 """
 
 import logging
+import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlencode
@@ -80,8 +81,12 @@ class TradeStationProvider(BaseProvider):
         "1w": ("Weekly", 1),
     }
 
-    # Maximum bars per request (TradeStation limit)
+    # Maximum bars per request (TradeStation per-request bar cap, all timeframes).
     MAX_BARS_PER_REQUEST = 57600  # ~40 days of minute data
+    # Tradestation also caps each intraday request at this many minute-equivalents
+    # (barsback × interval_minutes). Hit empirically as HTTP 400 with message
+    # "Request exceeds history limit: a maximum of 500000 intraday minutes ...".
+    INTRADAY_MINUTE_LIMIT_PER_REQUEST = 500_000
 
     def __init__(
         self,
@@ -89,6 +94,8 @@ class TradeStationProvider(BaseProvider):
         client_secret: str | None = None,
         refresh_token: str | None = None,
         timeout: float = 30.0,
+        retry_base_delay_s: float = 30.0,
+        retry_max_attempts: int = 3,
     ) -> None:
         """Initialize TradeStation provider.
 
@@ -97,6 +104,10 @@ class TradeStationProvider(BaseProvider):
             client_secret: OAuth2 client secret (required)
             refresh_token: OAuth2 refresh token (required)
             timeout: Request timeout in seconds (default: 30)
+            retry_base_delay_s: Initial backoff delay for ``RateLimitError`` retries.
+                Doubles after each retry. Tests should pass 0.0 to skip waiting.
+            retry_max_attempts: Number of *retries* after a ``RateLimitError``
+                (so total attempts = retry_max_attempts + 1). 0 disables retry.
 
         Raises:
             ValueError: If required credentials are missing
@@ -109,6 +120,8 @@ class TradeStationProvider(BaseProvider):
         self._client_secret = client_secret
         self._refresh_token = refresh_token
         self._timeout = timeout
+        self._retry_base_delay_s = retry_base_delay_s
+        self._retry_max_attempts = retry_max_attempts
 
         # Token state
         self._access_token: str | None = None
@@ -300,6 +313,44 @@ class TradeStationProvider(BaseProvider):
 
         return cast(dict[str, Any], response.json())
 
+    def _make_request_with_backoff(
+        self,
+        method: str,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Wrap _make_request with exponential backoff on RateLimitError.
+
+        Total attempts = ``self._retry_max_attempts + 1``. Delay doubles each retry
+        starting at ``self._retry_base_delay_s``. When retries are exhausted the
+        last ``RateLimitError`` propagates. Pass ``retry_base_delay_s=0`` in tests
+        to skip waiting.
+        """
+        delay = self._retry_base_delay_s
+        for attempt in range(self._retry_max_attempts + 1):
+            try:
+                return self._make_request(method, endpoint, params)
+            except RateLimitError:
+                if attempt == self._retry_max_attempts:
+                    raise
+                if delay > 0:
+                    time.sleep(delay)
+                delay *= 2
+        # Unreachable — loop either returns or raises.
+        raise RateLimitError("TradeStation rate limit exceeded after retries")
+
+    def _safe_bars_per_request(self, timeframe: str) -> int:
+        """Bars to request per single API call honoring Tradestation's limits.
+
+        Daily/Weekly: capped only by ``MAX_BARS_PER_REQUEST``. Minute timeframes
+        also capped by the 500,000 minute-equivalents per request rule.
+        """
+        unit, interval = self.TIMEFRAME_MAP[timeframe]
+        if unit == "Minute":
+            minute_cap = self.INTRADAY_MINUTE_LIMIT_PER_REQUEST // interval
+            return min(self.MAX_BARS_PER_REQUEST, minute_cap)
+        return self.MAX_BARS_PER_REQUEST
+
     def _normalize_symbol(self, symbol: str) -> str:
         """Normalize symbol for TradeStation API.
 
@@ -351,16 +402,19 @@ class TradeStationProvider(BaseProvider):
         current_end = datetime.combine(end, datetime.max.time()).replace(tzinfo=UTC)
         start_dt = datetime.combine(start, datetime.min.time()).replace(tzinfo=UTC)
 
+        bars_per_request = self._safe_bars_per_request(timeframe)
         while current_end > start_dt:
             # Build params
             params: dict[str, Any] = {
                 "unit": unit,
                 "interval": str(interval),
-                "barsback": str(self.MAX_BARS_PER_REQUEST),
+                "barsback": str(bars_per_request),
                 "lastdate": current_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
 
-            data = self._make_request("GET", f"/marketdata/barcharts/{api_symbol}", params)
+            data = self._make_request_with_backoff(
+                "GET", f"/marketdata/barcharts/{api_symbol}", params
+            )
 
             bars = data.get("Bars", [])
             if not bars:

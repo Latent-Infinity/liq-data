@@ -42,6 +42,8 @@ dependencies = [
     "tenacity>=9.0",
     "typer>=0.15",
     "rich>=13.9",
+    "fredapi>=0.5.2",
+    "pandas>=3.0.3",
 ]
 
 [project.scripts]

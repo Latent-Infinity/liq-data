@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from liq.data.providers.alpaca import AlpacaProvider
     from liq.data.providers.binance import BinanceProvider
     from liq.data.providers.coinbase import CoinbaseProvider
+    from liq.data.providers.fred import FREDProvider
     from liq.data.providers.oanda import OandaProvider
     from liq.data.providers.polygon import PolygonProvider
     from liq.data.providers.tradestation import TradeStationProvider
@@ -83,6 +84,9 @@ class LiqDataSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",  # Ignore extra env vars
     )
+
+    # FRED settings (Federal Reserve Economic Data)
+    fred_api_key: str | None = Field(default=None, description="FRED API key")
 
     # OANDA settings
     oanda_api_key: str | None = Field(default=None, description="OANDA API key")
@@ -377,6 +381,32 @@ def create_alpaca_provider(
         api_key=settings.alpaca_api_key,
         api_secret=settings.alpaca_api_secret,
     )
+
+
+def create_fred_provider(settings: LiqDataSettings | None = None) -> "FREDProvider":
+    """Create a FRED provider from settings.
+
+    Args:
+        settings: Optional settings instance (uses get_settings() if not provided)
+
+    Returns:
+        Configured FREDProvider instance
+
+    Raises:
+        ValueError: If FRED_API_KEY is not configured.
+    """
+    from liq.data.providers.fred import FREDProvider
+
+    if settings is None:
+        settings = get_settings()
+
+    if not settings.fred_api_key:
+        raise ValueError(
+            "FRED_API_KEY not configured. Set it in .env file or as environment "
+            "variable (free key from https://fred.stlouisfed.org/docs/api/api_key.html)."
+        )
+
+    return FREDProvider(api_key=settings.fred_api_key)
 
 
 @lru_cache

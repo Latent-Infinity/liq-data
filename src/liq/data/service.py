@@ -47,6 +47,7 @@ from liq.data.settings import (
     create_alpaca_provider,
     create_binance_provider,
     create_coinbase_provider,
+    create_fred_provider,
     create_oanda_provider,
     create_polygon_provider,
     create_tradestation_provider,
@@ -86,6 +87,7 @@ class DataService:
         "coinbase": create_coinbase_provider,
         "polygon": create_polygon_provider,
         "alpaca": create_alpaca_provider,
+        "fred": create_fred_provider,
     }
 
     def __init__(

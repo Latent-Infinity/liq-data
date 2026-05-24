@@ -6,6 +6,27 @@ import polars as pl
 import pytest
 
 
+def _noop_persist_env_value(*_args: object, **_kwargs: object) -> None:
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _block_real_env_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent any test from writing the developer's real .env file.
+
+    A provider that mocks the OAuth refresh endpoint will receive a fake
+    rotated refresh token and, under the default
+    ``tradestation_persist_refresh_token=True`` setting, will call
+    ``persist_env_value`` to write it. That's destructive in a dev shell
+    where the real ``.env`` is on disk - the user has already lost a
+    working refresh token to this exact path. Hard-block at the
+    test-isolation layer.
+    """
+    import liq.data.settings as _settings
+
+    monkeypatch.setattr(_settings, "persist_env_value", _noop_persist_env_value)
+
+
 @pytest.fixture
 def sample_timestamp() -> datetime:
     """Provide a sample timezone-aware timestamp for tests."""

@@ -691,9 +691,11 @@ class TestDataServiceExtended:
 
         class NoQuotes: ...
 
-        with patch.object(ds, "_get_provider", return_value=NoQuotes()):
-            with pytest.raises(ValueError):
-                ds.fetch_quotes("oanda", "EUR_USD", date(2024, 1, 1))
+        with (
+            patch.object(ds, "_get_provider", return_value=NoQuotes()),
+            pytest.raises(ValueError),
+        ):
+            ds.fetch_quotes("oanda", "EUR_USD", date(2024, 1, 1))
 
     def test_fetch_fundamentals_and_corp_actions(self, tmp_path: Path) -> None:
         """Fundamentals and corporate actions branches are covered."""

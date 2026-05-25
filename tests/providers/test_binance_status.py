@@ -5,6 +5,13 @@ from typing import Any
 from liq.data.providers import binance_status as bs
 
 
+def _fake_httpx_client_factory(responses: dict[str, Any]):
+    def _factory(**_kwargs: Any) -> _FakeClient:
+        return _FakeClient(responses)
+
+    return _factory
+
+
 class _FakeResponse:
     def __init__(self, payload: Any):
         self.payload = payload
@@ -39,7 +46,7 @@ def test_fetch_binance_system_status(monkeypatch):
 
     # inject responses into fake client construction
     monkeypatch.setattr(
-        bs, "httpx", SimpleNamespace(Client=lambda **kwargs: _FakeClient(responses))
+        bs, "httpx", SimpleNamespace(Client=_fake_httpx_client_factory(responses))
     )
 
     result = bs.fetch_binance_system_status()
@@ -66,7 +73,7 @@ def test_fetch_binance_announcements(monkeypatch):
     responses = {"https://status.binance.com/status/spot/history": announcements}
 
     monkeypatch.setattr(
-        bs, "httpx", SimpleNamespace(Client=lambda **kwargs: _FakeClient(responses))
+        bs, "httpx", SimpleNamespace(Client=_fake_httpx_client_factory(responses))
     )
 
     result = bs.fetch_binance_announcements(limit=10)
@@ -84,7 +91,10 @@ def test_fetch_binance_announcements_handles_non_json(monkeypatch):
             self.calls.append((url, params))
             return _NonJsonResponse("<html>")
 
-    monkeypatch.setattr(bs, "httpx", SimpleNamespace(Client=lambda **kwargs: _ClientWithHtml({})))
+    def _client_with_html_factory(**_kwargs: Any) -> _ClientWithHtml:
+        return _ClientWithHtml({})
+
+    monkeypatch.setattr(bs, "httpx", SimpleNamespace(Client=_client_with_html_factory))
 
     result = bs.fetch_binance_announcements(limit=5)
 

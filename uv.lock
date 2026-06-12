@@ -743,6 +743,7 @@ source = { editable = "." }
 dependencies = [
     { name = "databento" },
     { name = "exchange-calendars" },
+    { name = "filelock" },
     { name = "fredapi" },
     { name = "httpx" },
     { name = "liq-core" },
@@ -774,6 +775,7 @@ dev = [
 requires-dist = [
     { name = "databento", specifier = ">=0.59" },
     { name = "exchange-calendars", specifier = ">=4.5" },
+    { name = "filelock", specifier = ">=3.20" },
     { name = "fredapi", specifier = ">=0.5.2" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.120" },

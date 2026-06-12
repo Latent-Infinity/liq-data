@@ -32,12 +32,14 @@ Example:
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
 
 import polars as pl
+from filelock import FileLock, Timeout
 
 from liq.data.aggregation import aggregate_bars
 from liq.data.gaps import detect_gaps
@@ -53,6 +55,14 @@ from liq.data.settings import (
     create_polygon_provider,
     create_tradestation_provider,
     get_settings,
+)
+from liq.data.sync_events import (
+    EVENT_MANIFEST_GAP_DETECTED,
+    EVENT_MANIFEST_RANGE_APPENDED,
+    EVENT_MANIFEST_ROLLBACK,
+    EVENT_PIT_WARNING,
+    EVENT_UNIVERSE_RESOLVED,
+    SyncLockedError,
 )
 from liq.store import key_builder
 from liq.store.parquet import ParquetStore
@@ -690,6 +700,7 @@ class DataService:
         force_refresh: bool = False,
         registry: Any | None = None,
         as_of: date | None = None,
+        lock_timeout: float = 60.0,
     ) -> dict[str, Any]:
         """Sync a universe to local storage.
 
@@ -698,7 +709,12 @@ class DataService:
         coverage manifest, fetches each gap via the provider, and
         records the new ranges transactionally per symbol — so a fetch
         that raises mid-flight rolls back the manifest claim for that
-        symbol.
+        symbol but leaves earlier-symbol claims persisted (resumable).
+
+        A file lock keyed on ``(provider, dataset, timeframe,
+        universe.name)`` serializes concurrent syncs against the same
+        target; ``lock_timeout`` controls how long to wait before
+        raising :class:`SyncLockedError`.
 
         Returns a small report dict:
 
@@ -707,6 +723,8 @@ class DataService:
           (zero on a fully-cached re-run)
         * ``manifest_gaps`` — total uncovered ranges seen at planning time
         * ``rows_fetched`` — total rows pulled across all symbols
+        * ``pit`` — propagated from the resolved universe
+        * ``sync_run_id`` — UUID correlating every emitted log event
 
         ``force_refresh=True`` skips the gap calc and re-fetches every
         symbol over the full requested window.
@@ -719,7 +737,6 @@ class DataService:
             UniverseResolver,
         )
 
-        # Resolve to a UniverseDefinition.
         if isinstance(universe, UniverseDefinition):
             definition = universe
         else:
@@ -736,62 +753,149 @@ class DataService:
             named_universes=named_universes,
         ).resolve(definition, as_of=as_of or end)
 
-        prov = self._get_provider(provider)
-        fetched_at = datetime.now(UTC)
-        api_calls = 0
-        manifest_gaps_total = 0
-        rows_fetched = 0
-
-        request_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
-        request_end = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
-
-        for symbol in resolved.symbols:
-            manifest = CoverageManifest.load(
-                root=self._data_root,
-                provider=provider,
-                dataset=dataset,
-                timeframe=timeframe,
-                symbol=symbol,
-            )
-            gaps = (
-                [(request_start, request_end)]
-                if force_refresh
-                else manifest.gaps(start=request_start, end=request_end)
-            )
-            manifest_gaps_total += len(gaps)
-            if not gaps:
-                continue
-
-            with manifest.transaction() as txn:
-                for gap_start, gap_end in gaps:
-                    df = prov.fetch_bars(
-                        symbol,
-                        gap_start.date(),
-                        gap_end.date(),
-                        timeframe=timeframe,
-                    )
-                    api_calls += 1
-                    rows_fetched += df.height
-                    if not df.is_empty():
-                        storage_key = self._storage_key(provider, symbol, timeframe)
-                        write_mode = "overwrite" if force_refresh else "append"
-                        self._store.write(storage_key, df, mode=write_mode)
-                    txn.record(
-                        CoverageRange(
-                            start=gap_start,
-                            end=gap_end,
-                            fetched_at=fetched_at,
-                        )
-                    )
-
-        return {
-            "symbols": len(resolved.symbols),
-            "api_calls": api_calls,
-            "manifest_gaps": manifest_gaps_total,
-            "rows_fetched": rows_fetched,
-            "force_refresh": force_refresh,
-            "pit": resolved.pit,
+        sync_run_id = uuid.uuid4().hex
+        log_base: dict[str, Any] = {
+            "sync_run_id": sync_run_id,
+            "universe": definition.name,
+            "version": definition.version,
+            "kind": definition.kind.value,
+            "provider": provider,
+            "dataset": dataset,
+            "timeframe": timeframe,
         }
+        logger.info(
+            "universe resolved",
+            extra={
+                **log_base,
+                "event": EVENT_UNIVERSE_RESOLVED,
+                "symbols_count": len(resolved.symbols),
+                "as_of": resolved.as_of.isoformat(),
+                "pit": resolved.pit,
+            },
+        )
+        if not resolved.pit:
+            logger.warning(
+                "non-PIT universe; downstream sweeps will reject",
+                extra={
+                    **log_base,
+                    "event": EVENT_PIT_WARNING,
+                    "reason": "constituent source did not advertise PIT membership",
+                },
+            )
+
+        lock_path = (
+            self._data_root
+            / "locks"
+            / "sync"
+            / f"{provider}--{dataset}--{timeframe}--{definition.name}.lock"
+        )
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(lock_path), timeout=lock_timeout)
+        lock_acquired = False
+        try:
+            lock.acquire()
+            lock_acquired = True
+        except Timeout as exc:
+            raise SyncLockedError(
+                f"sync lock held for {provider}/{dataset}/{timeframe}/{definition.name}; "
+                f"waited {lock_timeout}s"
+            ) from exc
+
+        try:
+            prov = self._get_provider(provider)
+            fetched_at = datetime.now(UTC)
+            api_calls = 0
+            manifest_gaps_total = 0
+            rows_fetched = 0
+
+            request_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
+            request_end = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
+
+            for symbol in resolved.symbols:
+                manifest = CoverageManifest.load(
+                    root=self._data_root,
+                    provider=provider,
+                    dataset=dataset,
+                    timeframe=timeframe,
+                    symbol=symbol,
+                )
+                gaps = (
+                    [(request_start, request_end)]
+                    if force_refresh
+                    else manifest.gaps(start=request_start, end=request_end)
+                )
+                manifest_gaps_total += len(gaps)
+                if not gaps:
+                    continue
+
+                logger.info(
+                    "manifest gaps detected",
+                    extra={
+                        **log_base,
+                        "event": EVENT_MANIFEST_GAP_DETECTED,
+                        "symbol": symbol,
+                        "gaps_count": len(gaps),
+                    },
+                )
+
+                try:
+                    with manifest.transaction() as txn:
+                        for gap_start, gap_end in gaps:
+                            df = prov.fetch_bars(
+                                symbol,
+                                gap_start.date(),
+                                gap_end.date(),
+                                timeframe=timeframe,
+                            )
+                            api_calls += 1
+                            rows_fetched += df.height
+                            if not df.is_empty():
+                                storage_key = self._storage_key(provider, symbol, timeframe)
+                                write_mode = "overwrite" if force_refresh else "append"
+                                self._store.write(storage_key, df, mode=write_mode)
+                            txn.record(
+                                CoverageRange(
+                                    start=gap_start,
+                                    end=gap_end,
+                                    fetched_at=fetched_at,
+                                )
+                            )
+                            logger.info(
+                                "manifest range appended",
+                                extra={
+                                    **log_base,
+                                    "event": EVENT_MANIFEST_RANGE_APPENDED,
+                                    "symbol": symbol,
+                                    "start": gap_start.isoformat(),
+                                    "end": gap_end.isoformat(),
+                                    "rows": df.height,
+                                },
+                            )
+                except Exception as exc:
+                    logger.error(
+                        "manifest rollback",
+                        extra={
+                            **log_base,
+                            "event": EVENT_MANIFEST_ROLLBACK,
+                            "symbol": symbol,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                    )
+                    raise
+
+            return {
+                "symbols": len(resolved.symbols),
+                "api_calls": api_calls,
+                "manifest_gaps": manifest_gaps_total,
+                "rows_fetched": rows_fetched,
+                "force_refresh": force_refresh,
+                "pit": resolved.pit,
+                "sync_run_id": sync_run_id,
+            }
+        finally:
+            if lock_acquired:
+                lock.release()
 
 
 def _timeframe_to_minutes(tf: str) -> int:

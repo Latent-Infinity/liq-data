@@ -75,6 +75,25 @@ live, so it would poison downstream analysis.
 Sweep mode in `liq-scan` refuses to read against a non-PIT universe —
 see the requirements doc for the exact rule.
 
+When `sync(...)` resolves a non-PIT universe it emits a `pit_warning`
+log event (catalog in `docs/logging.md`) and proceeds — the sync runs,
+the operator sees the warning, and any downstream sweep refuses the
+result before reading bars.
+
+## Symbology renames
+
+A single raw symbol can map to different venue instrument ids across a
+backfill window (e.g., `FB → META` in 2022). Each Databento fetch
+persists its symbology table as append-only rows keyed by
+`(raw_symbol, instrument_id, valid_from, valid_to)`, so multi-row
+mappings round-trip through one parquet location
+(`reference/databento/symbology`).
+
+`DatabentoProvider.resolve_symbol_for_date(symbol, as_of)` reads the
+persisted table and returns the instrument id whose validity window
+contains `as_of`. Returns `None` if no row covers the date — callers
+should fail loud rather than picking the wrong id silently.
+
 ## CLI
 
 ```

@@ -47,6 +47,7 @@ dependencies = [
     "pandas>=3.0.3",
     "databento>=0.59",
     "exchange-calendars>=4.5",
+    "filelock>=3.20",
 ]
 
 [project.scripts]

@@ -87,6 +87,87 @@ The `duration_ms` on the `databento_fetch` event covers the entire
 wall-clock window including the backoff sleep — so it answers "how
 long did the user wait" rather than "how long did the venue take."
 
+## `DataService.sync` events
+
+`DataService.sync(universe, ...)` emits a small evergreen catalog of
+structured events to the `liq.data.service` logger. Every event in one
+sync invocation shares a single `sync_run_id` (UUID) so the operator
+can reconstruct the run from log output. Event-name constants live in
+`liq.data.sync_events` — string mismatches between emitter and parser
+are not possible.
+
+### `universe_resolved`
+
+Emitted once per `sync(...)` call, immediately after the resolver
+produces the symbol list and before any provider work.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `event` | `str` | Always `"universe_resolved"` |
+| `sync_run_id` | `str` | UUID; see § Reconstructing a session |
+| `universe` | `str` | Definition name |
+| `version` | `int` | Definition version |
+| `kind` | `str` | One of `explicit / filter / composite / set_op` |
+| `provider`, `dataset`, `timeframe` | `str` | Routed request shape |
+| `symbols_count` | `int` | Number of resolved symbols |
+| `as_of` | `str` | ISO date the universe was resolved as-of |
+| `pit` | `bool` | True iff the resolved universe is point-in-time |
+
+### `pit_warning`
+
+Emitted at level `WARNING` only when `pit=False` (e.g., a composite
+universe resolved through the in-memory stub source). Sync proceeds —
+downstream sweep mode refuses non-PIT input separately.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `event` | `str` | Always `"pit_warning"` |
+| `sync_run_id` | `str` | Matches the parent `universe_resolved` |
+| `universe`, `version`, `kind` | — | As above |
+| `provider`, `dataset`, `timeframe` | `str` | Routed request shape |
+| `reason` | `str` | Human-readable explanation (e.g., `"constituent source did not advertise PIT membership"`) |
+
+### `manifest_gap_detected`
+
+Emitted once per symbol that needs work — zero gaps means no event.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `event` | `str` | Always `"manifest_gap_detected"` |
+| `sync_run_id` | `str` | Matches the parent `universe_resolved` |
+| `symbol` | `str` | The symbol being planned |
+| `gaps_count` | `int` | Number of uncovered ranges in the requested window |
+
+### `manifest_range_appended`
+
+Emitted once per successful provider fetch + manifest commit (inside
+the per-symbol transaction). A zero-row fetch still emits this event —
+the manifest claim is recorded so the next sync does NOT re-bill the
+venue (see FR-4 / `docs/coverage-manifest.md`).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `event` | `str` | Always `"manifest_range_appended"` |
+| `sync_run_id` | `str` | Matches the parent `universe_resolved` |
+| `symbol` | `str` | The symbol whose range landed |
+| `start`, `end` | `str` | ISO timestamps of the half-open `[start, end)` range |
+| `rows` | `int` | Bars returned by the provider (can be 0 for thin symbols) |
+
+### `manifest_rollback`
+
+Emitted at level `ERROR` when a per-symbol transaction exits via
+exception — the manifest claim is reverted before the exception
+propagates. Earlier symbols' commits are not affected, so a re-run
+picks up where the failure occurred.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `event` | `str` | Always `"manifest_rollback"` |
+| `sync_run_id` | `str` | Matches the parent `universe_resolved` |
+| `symbol` | `str` | The symbol whose transaction rolled back |
+| `error_type` | `str` | Concrete exception class name |
+| `error_message` | `str` | `str(exc)` of the caught error |
+
 ## Reconstructing a session
 
 The `sync_run_id` correlation key makes session reconstruction a single

@@ -32,6 +32,20 @@ Everything under `liq.data.providers.databento.DatabentoError`:
 | `DatabentoSchemaError` | Response store carries a schema string that doesn't match the requested schema (e.g. asked for `ohlcv-1m`, got `ohlcv-1h`). | **No** — retrying would return the same mismatched store. | Investigate dataset routing or schema request; check the Databento console for recent venue changes. |
 | `AggregateCrossCheckError` | `validate_aggregate(symbol, date)` found a 1m-aggregate vs `EQUS.SUMMARY` 1d mismatch. Price fields exceeded 0.001 % of midrange close, or volume did not match exactly. | **No** — data quality concern, not a transient failure. | Inspect `exc.diffs` for the field-by-field drift; consider re-ingesting with `force_refresh` or escalating to the venue. |
 
+## `DataService.sync` errors
+
+`DataService.sync(...)` introduces one new exception class in
+`liq.data.sync_events`:
+
+| Exception | When raised | Retry-eligible? | Recovery |
+| --- | --- | --- | --- |
+| `SyncLockedError` | A concurrent `sync(...)` against the same `(provider, dataset, timeframe, universe)` tuple holds the file lock under `{DATA_ROOT}/locks/sync/`. The current call waited `lock_timeout` seconds without acquiring. | **Yes**, eventually — the underlying lock is released when the other sync exits. | Wait + retry, or raise `lock_timeout` for tolerant callers. The manifest is never partially written under contention; it's either claimed by the winner or untouched. |
+
+Beyond this, `sync(...)` re-raises whatever the provider raises (the
+per-symbol transaction rolls back the manifest claim first — see
+`manifest_rollback` in `docs/logging.md`). Earlier-symbol commits are
+preserved, so the failure point is resumable.
+
 ## How callers should handle them
 
 ```python

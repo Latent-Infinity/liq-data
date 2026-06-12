@@ -1190,6 +1190,39 @@ class DatabentoProvider(BaseProvider):
             return
         self._store.write(SYMBOLOGY_KEY, df, mode="append")
 
+    def resolve_symbol_for_date(self, symbol: str, as_of: date) -> int | None:
+        """Return the venue instrument id for ``symbol`` valid on ``as_of``.
+
+        Reads the persisted symbology table written by
+        :meth:`_persist_symbology` — one row per ``(raw_symbol,
+        instrument_id)`` mapping with ``valid_from`` / ``valid_to``
+        ISO-date strings. Returns ``None`` when no row covers
+        ``as_of``, so callers can fail loud rather than silently picking
+        the wrong id across a rename (e.g., ``FB → META``).
+        """
+        if self._store is None or not self._store.exists(SYMBOLOGY_KEY):
+            return None
+        df = self._store.read(SYMBOLOGY_KEY)
+        if df.is_empty():
+            return None
+        iso = as_of.isoformat()
+        valid_from = (
+            pl.when(pl.col("valid_from").is_null() | (pl.col("valid_from") == ""))
+            .then(pl.lit("0001-01-01"))
+            .otherwise(pl.col("valid_from"))
+        )
+        valid_to = (
+            pl.when(pl.col("valid_to").is_null() | (pl.col("valid_to") == ""))
+            .then(pl.lit("9999-12-31"))
+            .otherwise(pl.col("valid_to"))
+        )
+        matching = df.filter(
+            (pl.col("raw_symbol") == symbol) & (valid_from <= iso) & (valid_to >= iso)
+        )
+        if matching.is_empty():
+            return None
+        return int(matching["instrument_id"][0])
+
 
 __all__ = [
     "AGGREGATE_TOLERANCE",

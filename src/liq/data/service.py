@@ -32,10 +32,10 @@ Example:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
 
 import polars as pl
 
@@ -80,7 +80,7 @@ class DataService:
     """
 
     # Provider factory mapping
-    _PROVIDER_FACTORIES = {
+    _PROVIDER_FACTORIES: ClassVar[dict[str, Callable[[LiqDataSettings], MarketDataProvider]]] = {
         "oanda": create_oanda_provider,
         "binance": create_binance_provider,
         "tradestation": create_tradestation_provider,
@@ -141,6 +141,34 @@ class DataService:
             supported = ", ".join(self._PROVIDER_FACTORIES.keys())
             raise ValueError(f"Unknown provider: {provider_name}. Supported: {supported}")
         return factory(self._settings)
+
+    @overload
+    def load(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        start: date | None = ...,
+        end: date | None = ...,
+        columns: list[str] | None = ...,
+        *,
+        streaming: Literal[False] = False,
+        batch_size: None = None,
+    ) -> pl.DataFrame: ...
+
+    @overload
+    def load(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        start: date | None = ...,
+        end: date | None = ...,
+        columns: list[str] | None = ...,
+        *,
+        streaming: bool = ...,
+        batch_size: int | None = ...,
+    ) -> pl.DataFrame | Iterator[pl.DataFrame]: ...
 
     def load(
         self,
@@ -441,22 +469,18 @@ class DataService:
         gaps = detect_gaps(existing, timedelta(minutes=expected_minutes))
         fetched_parts: list[pl.DataFrame] = []
 
-        # Cover ends if needed
-        if existing["timestamp"].min() > datetime.combine(start, datetime.min.time(), tzinfo=UTC):
-            gaps.insert(
-                0,
-                (
-                    datetime.combine(start, datetime.min.time(), tzinfo=UTC),
-                    existing["timestamp"].min(),
-                ),
-            )
-        if existing["timestamp"].max() < datetime.combine(end, datetime.min.time(), tzinfo=UTC):
-            gaps.append(
-                (
-                    existing["timestamp"].max(),
-                    datetime.combine(end, datetime.min.time(), tzinfo=UTC),
-                )
-            )
+        # Cover ends if needed.
+        # Polars typing widens Series.min()/.max() to PythonLiteral | None;
+        # we've already validated the column is a tz-aware datetime above,
+        # so narrow back to datetime for the comparisons + tuple append.
+        existing_min = cast(datetime, existing["timestamp"].min())
+        existing_max = cast(datetime, existing["timestamp"].max())
+        start_dt = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
+        end_dt = datetime.combine(end, datetime.min.time(), tzinfo=UTC)
+        if existing_min > start_dt:
+            gaps.insert(0, (start_dt, existing_min))
+        if existing_max < end_dt:
+            gaps.append((existing_max, end_dt))
 
         for gap_start, gap_end in gaps:
             gap_df = prov.fetch_bars(symbol, gap_start.date(), gap_end.date(), timeframe=timeframe)
@@ -501,19 +525,26 @@ class DataService:
         if "timestamp" in df.columns:
             dup_count = len(df) - df.select("timestamp").unique().height
 
-        result = {"row_count": len(df), "errors": [], "warnings": [], "null_count": null_count}
+        errors: list[str] = []
+        warnings: list[str] = []
+        result: dict[str, Any] = {
+            "row_count": len(df),
+            "errors": errors,
+            "warnings": warnings,
+            "null_count": null_count,
+        }
         if null_count > 0:
-            result["errors"].append(f"Found {null_count} null values")
+            errors.append(f"Found {null_count} null values")
         if dup_count > 0:
-            result["errors"].append(f"Found {dup_count} duplicate timestamps")
+            errors.append(f"Found {dup_count} duplicate timestamps")
 
         try:
             validation = validate_ohlc(df)
-            result["warnings"].extend(validation.warnings)
-            result["valid"] = validation.is_valid and not result["errors"]
+            warnings.extend(validation.warnings)
+            result["valid"] = validation.is_valid and not errors
         except Exception as exc:  # pragma: no cover - already unit tested in qa
             result["valid"] = False
-            result["errors"].append(str(exc))
+            errors.append(str(exc))
         return result
 
     def info(self, provider: str, symbol: str, timeframe: str) -> dict[str, Any]:

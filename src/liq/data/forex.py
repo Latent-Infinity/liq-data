@@ -49,7 +49,8 @@ def normalize_hourly(
     if missing:
         raise DataQualityError(f"Missing required columns: {sorted(missing)}")
 
-    if df["timestamp"].dtype.time_zone is None:
+    ts_dtype = df["timestamp"].dtype
+    if not isinstance(ts_dtype, pl.Datetime) or ts_dtype.time_zone is None:
         raise DataQualityError("Timestamps must be timezone-aware UTC")
 
     non_monotonic = df.select((pl.col("timestamp") < pl.col("timestamp").shift(1)).any()).item()

@@ -124,7 +124,8 @@ def validate_ohlc(df: pl.DataFrame) -> ValidationResult:
     if errors:
         raise SchemaValidationError(errors[0])
 
-    if df["timestamp"].dtype.time_zone is None:
+    ts_dtype = df["timestamp"].dtype
+    if not isinstance(ts_dtype, pl.Datetime) or ts_dtype.time_zone is None:
         errors.append("Timestamps must be timezone-aware UTC")
 
     errors.extend(_check_ohlc_constraints(df))

@@ -129,6 +129,37 @@ class BaseProvider(ABC):
 
         return filtered.row(0, named=True)
 
+    # ------------------------------------------------------------------
+    # Optional-API default implementations.
+    #
+    # ``MarketDataProvider`` (protocols.py) declares the full surface a
+    # ``DataService`` may consume. Concrete adapters override only the
+    # methods their venue actually supports. The defaults below raise
+    # ``NotImplementedError`` at call time so structural typing passes
+    # without quietly returning misleading data — callers must catch or
+    # handle the exception explicitly.
+    # ------------------------------------------------------------------
+
+    def fetch_quotes(self, symbol: str, start: date, end: date) -> pl.DataFrame:
+        """Default: not implemented. Override in adapters that support quotes."""
+        raise NotImplementedError(f"{type(self).__name__}.fetch_quotes is not implemented")
+
+    def fetch_fundamentals(self, symbol: str, as_of: date) -> dict[str, Any]:
+        """Default: not implemented. Override in adapters that support fundamentals."""
+        raise NotImplementedError(f"{type(self).__name__}.fetch_fundamentals is not implemented")
+
+    def get_corporate_actions(self, symbol: str, start: date, end: date) -> list[Any]:
+        """Default: not implemented. Override in adapters that support CA."""
+        raise NotImplementedError(f"{type(self).__name__}.get_corporate_actions is not implemented")
+
+    def get_universe(self, asset_class: str, as_of: date | None = None) -> list[str]:
+        """Default: not implemented. Override in adapters that expose a universe."""
+        raise NotImplementedError(f"{type(self).__name__}.get_universe is not implemented")
+
+    def fetch_instruments(self, asset_class: str) -> list[Any]:
+        """Default: not implemented. Override in adapters that expose instruments."""
+        raise NotImplementedError(f"{type(self).__name__}.fetch_instruments is not implemented")
+
     def validate_timeframe(self, timeframe: str) -> None:
         """Validate that a timeframe is supported.
 

@@ -173,6 +173,9 @@ def async_retry(
         @functools.wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             last_exception: Exception | None = None
+            # ``Callable`` has no static ``__name__``; fall back to repr for
+            # adapters where the decorator wraps a partial/lambda.
+            func_name = getattr(func, "__name__", repr(func))
 
             # Ensure at least one attempt
             for attempt in range(max(1, max_retries)):
@@ -181,7 +184,7 @@ def async_retry(
                     if attempt > 0:
                         logger.info(
                             "async_retry succeeded function=%s attempt=%d",
-                            func.__name__,
+                            func_name,
                             attempt + 1,
                         )
                     return result
@@ -193,7 +196,7 @@ def async_retry(
                     if attempt == max(1, max_retries) - 1:
                         logger.error(
                             "async_retry exhausted function=%s max_retries=%d error=%s",
-                            func.__name__,
+                            func_name,
                             max_retries,
                             str(e),
                         )
@@ -204,7 +207,7 @@ def async_retry(
 
                     logger.warning(
                         "async_retry attempt function=%s attempt=%d max_retries=%d delay=%.2f error=%s",
-                        func.__name__,
+                        func_name,
                         attempt + 1,
                         max_retries,
                         delay,

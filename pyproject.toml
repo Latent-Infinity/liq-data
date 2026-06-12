@@ -44,6 +44,8 @@ dependencies = [
     "rich>=13.9",
     "fredapi>=0.5.2",
     "pandas>=3.0.3",
+    "databento>=0.59",
+    "exchange-calendars>=4.5",
 ]
 
 [project.scripts]

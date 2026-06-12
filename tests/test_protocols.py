@@ -30,7 +30,7 @@ class TestMarketDataProviderProtocol:
         assert hasattr(MarketDataProvider, "list_instruments")
 
     def test_protocol_defines_extended_surface(self) -> None:
-        """Protocol should define extended PRD methods."""
+        """Protocol should define extended requirements methods."""
         assert hasattr(MarketDataProvider, "get_instrument")
         assert hasattr(MarketDataProvider, "fetch_quotes")
         assert hasattr(MarketDataProvider, "fetch_fundamentals")

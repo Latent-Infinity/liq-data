@@ -5,7 +5,7 @@ This module assembles all CLI submodules into a single application.
 
 import typer
 
-from liq.data.cli import auth, fetch, info, manage, validate
+from liq.data.cli import auth, fetch, info, manage, universe, validate
 
 app = typer.Typer(
     name="liq-data",
@@ -36,6 +36,10 @@ app.command("delete")(manage.delete_data)
 # Auth helpers
 app.command("tradestation-auth-url")(auth.tradestation_auth_url)
 app.command("tradestation-exchange-code")(auth.tradestation_exchange_code)
+
+# Universe + sync
+app.add_typer(universe.universe_app, name="universe")
+app.command("sync")(universe.sync_universe)
 
 
 def main() -> None:

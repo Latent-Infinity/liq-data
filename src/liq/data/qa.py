@@ -112,7 +112,7 @@ def _check_stale(df: pl.DataFrame, stale_minutes: int = 60) -> list[str]:
 
 
 def validate_ohlc(df: pl.DataFrame) -> ValidationResult:
-    """Validate OHLC data against PRD rules."""
+    """Validate OHLC data against requirements rules."""
     errors: list[str] = []
     warnings: list[str] = []
 

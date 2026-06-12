@@ -676,6 +676,123 @@ class DataService:
         prov = self._get_provider(provider)
         return prov.validate_credentials()
 
+    # ----- universe sync ------------------------------------------------
+
+    def sync(
+        self,
+        universe: Any,
+        *,
+        start: date,
+        end: date,
+        provider: str,
+        timeframe: str,
+        dataset: str,
+        force_refresh: bool = False,
+        registry: Any | None = None,
+        as_of: date | None = None,
+    ) -> dict[str, Any]:
+        """Sync a universe to local storage.
+
+        Resolves the universe (a :class:`UniverseDefinition` or a name to
+        look up in ``registry``), computes per-symbol fetch gaps from the
+        coverage manifest, fetches each gap via the provider, and
+        records the new ranges transactionally per symbol — so a fetch
+        that raises mid-flight rolls back the manifest claim for that
+        symbol.
+
+        Returns a small report dict:
+
+        * ``symbols`` — count of resolved symbols
+        * ``api_calls`` — number of provider fetches actually made
+          (zero on a fully-cached re-run)
+        * ``manifest_gaps`` — total uncovered ranges seen at planning time
+        * ``rows_fetched`` — total rows pulled across all symbols
+
+        ``force_refresh=True`` skips the gap calc and re-fetches every
+        symbol over the full requested window.
+        """
+        from liq.data.manifest import CoverageManifest, CoverageRange
+        from liq.data.universes import (
+            InMemoryStubSource,
+            UniverseDefinition,
+            UniverseRegistry,
+            UniverseResolver,
+        )
+
+        # Resolve to a UniverseDefinition.
+        if isinstance(universe, UniverseDefinition):
+            definition = universe
+        else:
+            reg = registry if isinstance(registry, UniverseRegistry) else None
+            if reg is None:
+                raise ValueError("sync() with a universe name requires a UniverseRegistry")
+            definition = reg.load(str(universe))
+        named_universes = None
+        if isinstance(registry, UniverseRegistry):
+            named_universes = {name: registry.load(name) for name in registry.list_names()}
+
+        resolved = UniverseResolver(
+            constituent_source=InMemoryStubSource(),
+            named_universes=named_universes,
+        ).resolve(definition, as_of=as_of or end)
+
+        prov = self._get_provider(provider)
+        fetched_at = datetime.now(UTC)
+        api_calls = 0
+        manifest_gaps_total = 0
+        rows_fetched = 0
+
+        request_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
+        request_end = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
+
+        for symbol in resolved.symbols:
+            manifest = CoverageManifest.load(
+                root=self._data_root,
+                provider=provider,
+                dataset=dataset,
+                timeframe=timeframe,
+                symbol=symbol,
+            )
+            gaps = (
+                [(request_start, request_end)]
+                if force_refresh
+                else manifest.gaps(start=request_start, end=request_end)
+            )
+            manifest_gaps_total += len(gaps)
+            if not gaps:
+                continue
+
+            with manifest.transaction() as txn:
+                for gap_start, gap_end in gaps:
+                    df = prov.fetch_bars(
+                        symbol,
+                        gap_start.date(),
+                        gap_end.date(),
+                        timeframe=timeframe,
+                    )
+                    api_calls += 1
+                    rows_fetched += df.height
+                    if not df.is_empty():
+                        storage_key = self._storage_key(provider, symbol, timeframe)
+                        write_mode = "overwrite" if force_refresh else "append"
+                        self._store.write(storage_key, df, mode=write_mode)
+                    txn.record(
+                        CoverageRange(
+                            start=gap_start,
+                            end=gap_end,
+                            fetched_at=fetched_at,
+                        )
+                    )
+
+        return {
+            "symbols": len(resolved.symbols),
+            "api_calls": api_calls,
+            "manifest_gaps": manifest_gaps_total,
+            "rows_fetched": rows_fetched,
+            "force_refresh": force_refresh,
+            "pit": resolved.pit,
+        }
+
 
 def _timeframe_to_minutes(tf: str) -> int:
     mapping = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}

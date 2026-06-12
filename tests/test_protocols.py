@@ -13,7 +13,9 @@ class TestMarketDataProviderProtocol:
 
     def test_protocol_is_runtime_checkable(self) -> None:
         """Protocol should be runtime checkable."""
-        assert hasattr(MarketDataProvider, "__protocol_attrs__") or isinstance(MarketDataProvider, type)
+        assert hasattr(MarketDataProvider, "__protocol_attrs__") or isinstance(
+            MarketDataProvider, type
+        )
 
     def test_protocol_defines_name(self) -> None:
         """Protocol should define name property."""
@@ -150,7 +152,9 @@ class TestAsyncMarketDataProviderProtocol:
 
     def test_async_protocol_is_runtime_checkable(self) -> None:
         """Async protocol should be runtime checkable."""
-        assert hasattr(AsyncMarketDataProvider, "__protocol_attrs__") or isinstance(AsyncMarketDataProvider, type)
+        assert hasattr(AsyncMarketDataProvider, "__protocol_attrs__") or isinstance(
+            AsyncMarketDataProvider, type
+        )
 
     def test_async_protocol_defines_name(self) -> None:
         """Async protocol should define name property."""

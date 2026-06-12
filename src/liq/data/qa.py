@@ -94,9 +94,7 @@ def _check_spikes(df: pl.DataFrame, threshold: float = 0.2) -> list[str]:
     # Guard the denominator (see run_bar_qa): undefined when prior close is 0.
     prev_close = pl.col("close").shift(1)
     safe_prev = pl.when(prev_close != 0).then(prev_close)
-    spikes = df.with_columns(
-        ((pl.col("close") - prev_close).abs() / safe_prev).alias("pct")
-    )
+    spikes = df.with_columns(((pl.col("close") - prev_close).abs() / safe_prev).alias("pct"))
     if spikes.filter(pl.col("pct") > threshold).is_empty():
         return []
     return [f"Price spike warning: move > {threshold:.0%}"]

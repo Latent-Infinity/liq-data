@@ -103,9 +103,7 @@ class FREDProvider(BaseProvider):
         timeframe: str = "1d",  # noqa: ARG002 — FRED uses native frequency
     ) -> pl.DataFrame:
         client = self._get_client()
-        series = client.get_series(
-            symbol, observation_start=start, observation_end=end
-        )
+        series = client.get_series(symbol, observation_start=start, observation_end=end)
         rows: list[dict[str, Any]] = []
         try:
             iter_items = list(series.items())
@@ -138,7 +136,8 @@ class FREDProvider(BaseProvider):
         return df
 
     def list_instruments(
-        self, asset_class: str | None = None  # noqa: ARG002 — see below
+        self,
+        asset_class: str | None = None,  # noqa: ARG002 — see below
     ) -> pl.DataFrame:
         # FRED has 800k+ series; no useful global listing endpoint. Callers
         # query by series_id directly. Return empty schema-conforming frame.

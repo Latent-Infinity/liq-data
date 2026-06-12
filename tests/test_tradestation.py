@@ -449,9 +449,7 @@ class TestTokenPersistGuard:
     in dev — the guard exists so it cannot happen again.
     """
 
-    def test_persist_env_value_is_a_no_op_during_tests(
-        self, tmp_path: "object"
-    ) -> None:  # type: ignore[name-defined]
+    def test_persist_env_value_is_a_no_op_during_tests(self, tmp_path: "object") -> None:  # type: ignore[name-defined]
         # The autouse fixture replaces the attribute on the module. Importing
         # and calling it must do nothing — specifically, it must NOT write to
         # any path we pass it.

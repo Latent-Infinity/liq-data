@@ -51,11 +51,15 @@ lets tests and operators flip it.
 * The exact crossover is empirical and Databento may tune it; the value
   is config not constant for that reason.
 
-### Current batch-path limitations
+### Batch recovery
 
-The current implementation routes the whole batch through one job and
-waits for completion before downloading. Partial-recovery and async
-polling are tracked as follow-up hardening (see § Hardening backlog).
+Batch requests are keyed by `(dataset, symbol, schema, start, end)` and
+persist a small marker under the provider's batch-job cache directory.
+If a download fails after submission, the next invocation with the same
+request signature resumes the existing Databento job instead of
+submitting a duplicate job. The marker is deleted only after a clean
+download. Terminal failed job states remove the marker and raise
+`DatabentoError` so a later run can submit a fresh job.
 
 ## Decimal precision
 
@@ -94,9 +98,9 @@ Symbology persistence is best-effort: if the provider was constructed
 without a `store=`, it computes the frame but doesn't persist. If the
 fetch returned an empty symbology dict, no write happens.
 
-## Structured log event
+## Structured log events
 
-Every fetch emits one `INFO` record on the
+Every successful fetch emits one `INFO` record on the
 `liq.data.providers.databento` logger with the following queryable
 fields (set via `extra=`):
 
@@ -116,6 +120,50 @@ fields (set via `extra=`):
 These fields land on `LogRecord` attributes; tests assert their
 presence (see `tests/providers/test_databento.py::TestLogging`).
 
+Transient retries emit `event="databento_retry"` before sleeping for
+backoff. Retry logs include the same `sync_run_id` as the eventual
+`databento_fetch` success, plus `attempt`, `max_attempts`, `backoff_s`,
+`error_type`, and `error_message`.
+
+## Retries and schema checks
+
+The provider uses `tenacity` for bounded retry. Databento-specific
+`DatabentoTransientError` and `DatabentoRateLimitError` are retryable.
+Raw SDK exceptions are also translated when they expose HTTP status
+metadata:
+
+| Input failure | Provider behavior |
+| --- | --- |
+| HTTP `429` | Converts to `DatabentoRateLimitError`, honors `Retry-After` when present, and retries |
+| HTTP `5xx` | Converts to `DatabentoTransientError` and retries with exponential backoff |
+| Transport timeout / connection failure | Converts to `DatabentoTransientError` and retries |
+| Other provider error | Propagates without retry |
+
+Response stores that expose a schema must match the requested schema.
+A mismatch raises `DatabentoSchemaError` before records are materialized.
+
+## Local aggregation and cross-checks
+
+`aggregate_bars(df_1m, timeframe=...)` deterministically rolls 1m bars
+to `5m`, `15m`, `30m`, `1h`, or `1d` without issuing another Databento
+request. The aggregation uses wall-clock bucket boundaries:
+
+| Field | Rule |
+| --- | --- |
+| `open` | first value in bucket |
+| `high` | max value in bucket |
+| `low` | min value in bucket |
+| `close` | last value in bucket |
+| `volume` | sum |
+
+`validate_aggregate(symbol, date)` compares locally aggregated 1m data
+against `EQUS.SUMMARY` for the same date. Price fields must be within
+`0.001 %` of the local/venue close midpoint; volume must match exactly.
+Callers that want validation as part of ingest can use
+`fetch_bars(..., timeframe="1m", validate_aggregate=True)`, which
+reuses the already fetched 1m frame and only performs the daily summary
+comparison request.
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -130,7 +178,7 @@ touches the network. Only `tests/providers/test_databento.py::test_real_databent
 calls the real API, and that test is `@pytest.mark.databento`-gated +
 checks `RUN_DATABENTO=1` before doing anything.
 
-## Out of scope (lives in other modules / future work)
+## Out of scope
 
 * **Universes, manifest, `sync(universe)`** — live in `liq.data.universes`
   and `liq.data.manifest` (separate work stream).
@@ -139,17 +187,3 @@ checks `RUN_DATABENTO=1` before doing anything.
   stays single-symbol for predictability and quota accounting.
 * **Real-time / Live API** — historical only; intentionally not in
   scope.
-
-### Hardening backlog
-
-Known follow-up work for this provider:
-
-* 5xx retry with backoff (reuse `tenacity` already in `liq-data`).
-* 429 rate-limit handling.
-* Partial-download recovery for batch jobs that fail midway (resumable
-  on re-invocation).
-* Schema-mismatch error (`DatabentoSchemaError`).
-* `validate_aggregate(symbol, date)` — daily aggregate of ingested 1m
-  bars vs. EQUS.SUMMARY within tolerance.
-* Local 1m → 5m / 15m / 1h / 1d resampling helper, owned here so we
-  don't re-purchase coarser schemas.

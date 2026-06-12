@@ -18,12 +18,18 @@ from liq.data.fetcher import DataFetcher
 from liq.data.forex import detect_gap_policy, normalize_hourly
 from liq.data.instruments import InstrumentSync
 from liq.data.protocols import AsyncMarketDataProvider, MarketDataProvider
-from liq.data.providers import BaseProvider, BinanceProvider, OandaProvider
+from liq.data.providers import (
+    BaseProvider,
+    BinanceProvider,
+    DatabentoProvider,
+    OandaProvider,
+)
 from liq.data.retry import async_retry, retry
 from liq.data.service import DataService
 from liq.data.settings import (
     LiqDataSettings,
     create_binance_provider,
+    create_databento_provider,
     create_oanda_provider,
     get_settings,
 )
@@ -35,6 +41,7 @@ __all__ = [
     "get_settings",
     "create_oanda_provider",
     "create_binance_provider",
+    "create_databento_provider",
     # Protocols
     "MarketDataProvider",
     "AsyncMarketDataProvider",
@@ -43,6 +50,7 @@ __all__ = [
     # Providers
     "OandaProvider",
     "BinanceProvider",
+    "DatabentoProvider",
     # Service API
     "DataService",
     # Ingestion utilities

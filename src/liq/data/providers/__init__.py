@@ -7,6 +7,7 @@ from liq.data.providers.alpaca import AlpacaProvider
 from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE, BaseProvider
 from liq.data.providers.binance import BinanceProvider
 from liq.data.providers.coinbase import CoinbaseProvider
+from liq.data.providers.databento import DatabentoProvider
 from liq.data.providers.fred import FREDProvider
 from liq.data.providers.oanda import OandaProvider
 from liq.data.providers.polygon import PolygonProvider
@@ -17,6 +18,7 @@ __all__ = [
     "BaseProvider",
     "BinanceProvider",
     "CoinbaseProvider",
+    "DatabentoProvider",
     "FREDProvider",
     "OandaProvider",
     "PolygonProvider",

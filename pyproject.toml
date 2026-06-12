@@ -79,6 +79,9 @@ packages = ["src/liq"]
 testpaths = ["tests"]
 addopts = "-ra -q --cov=liq.data --cov-report=term-missing --cov-fail-under=90"
 asyncio_mode = "auto"
+markers = [
+    "databento: opt-in tests that hit the real Databento API (set RUN_DATABENTO=1)",
+]
 
 [tool.coverage.run]
 source = ["src/liq/data"]

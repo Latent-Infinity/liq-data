@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from liq.data.providers.alpaca import AlpacaProvider
     from liq.data.providers.binance import BinanceProvider
     from liq.data.providers.coinbase import CoinbaseProvider
+    from liq.data.providers.databento import DatabentoProvider
     from liq.data.providers.fred import FREDProvider
     from liq.data.providers.oanda import OandaProvider
     from liq.data.providers.polygon import PolygonProvider
@@ -141,6 +142,9 @@ class LiqDataSettings(BaseSettings):
     # Alpaca settings
     alpaca_api_key: str | None = Field(default=None, description="Alpaca API key")
     alpaca_api_secret: str | None = Field(default=None, description="Alpaca API secret")
+
+    # Databento settings
+    databento_api_key: str | None = Field(default=None, description="Databento API key")
 
     # Storage settings
     data_root: Path = Field(
@@ -407,6 +411,41 @@ def create_fred_provider(settings: LiqDataSettings | None = None) -> "FREDProvid
         )
 
     return FREDProvider(api_key=settings.fred_api_key)
+
+
+def create_databento_provider(
+    settings: LiqDataSettings | None = None,
+) -> "DatabentoProvider":
+    """Create a Databento provider from settings.
+
+    Minute-bar acquisition for US equities via ``EQUS.MINI`` /
+    ``EQUS.SUMMARY``. The provider routes to
+    ``databento.Historical.timeseries.get_range`` for date ranges below
+    ``DATABENTO_BATCH_THRESHOLD_DAYS`` and to the batch download API
+    above (see ``providers/databento.py``).
+
+    Args:
+        settings: Optional settings instance (uses ``get_settings()`` if
+            not provided).
+
+    Returns:
+        Configured ``DatabentoProvider`` instance.
+
+    Raises:
+        ValueError: If ``DATABENTO_API_KEY`` is not configured.
+    """
+    from liq.data.providers.databento import DatabentoProvider
+
+    if settings is None:
+        settings = get_settings()
+
+    if not settings.databento_api_key:
+        raise ValueError(
+            "DATABENTO_API_KEY not configured. Set it in .env file or as "
+            "environment variable (key from https://databento.com/)."
+        )
+
+    return DatabentoProvider(api_key=settings.databento_api_key)
 
 
 @lru_cache

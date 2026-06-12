@@ -47,6 +47,7 @@ from liq.data.settings import (
     create_alpaca_provider,
     create_binance_provider,
     create_coinbase_provider,
+    create_databento_provider,
     create_fred_provider,
     create_oanda_provider,
     create_polygon_provider,
@@ -88,6 +89,7 @@ class DataService:
         "polygon": create_polygon_provider,
         "alpaca": create_alpaca_provider,
         "fred": create_fred_provider,
+        "databento": create_databento_provider,
     }
 
     def __init__(
@@ -140,7 +142,11 @@ class DataService:
         if factory is None:
             supported = ", ".join(self._PROVIDER_FACTORIES.keys())
             raise ValueError(f"Unknown provider: {provider_name}. Supported: {supported}")
-        return factory(self._settings)
+        provider = factory(self._settings)
+        set_store = getattr(provider, "set_store", None)
+        if callable(set_store):
+            set_store(self._store)
+        return provider
 
     @overload
     def load(

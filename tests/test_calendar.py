@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 
 from liq.data.calendar import (
+    extended_trading_minutes_window,
     nyse_session_close,
     trading_minutes_window,
     trading_sessions_window,
@@ -44,12 +45,47 @@ class TestTradingMinutesWindow:
         # of the regular session).
         assert start == datetime(2024, 5, 31, 19, 35, tzinfo=UTC)
 
+    def test_early_close_session_uses_actual_session_minutes(self) -> None:
+        end = datetime(2024, 11, 29, 18, 0, tzinfo=UTC)
+        start, resolved_end = trading_minutes_window(end, 210)
+        assert resolved_end == end
+        assert start == datetime(2024, 11, 29, 14, 30, tzinfo=UTC)
+
+    def test_dst_shift_is_resolved_by_exchange_calendar(self) -> None:
+        before_dst_start, _ = trading_minutes_window(datetime(2024, 3, 8, 21, 0, tzinfo=UTC), 390)
+        after_dst_start, _ = trading_minutes_window(datetime(2024, 3, 11, 20, 0, tzinfo=UTC), 390)
+        assert before_dst_start == datetime(2024, 3, 8, 14, 30, tzinfo=UTC)
+        assert after_dst_start == datetime(2024, 3, 11, 13, 30, tzinfo=UTC)
+
     def test_rejects_zero_or_negative_n(self) -> None:
         end = datetime(2024, 6, 3, 20, 0, tzinfo=UTC)
         with pytest.raises(ValueError, match="positive"):
             trading_minutes_window(end, 0)
         with pytest.raises(ValueError, match="positive"):
             trading_minutes_window(end, -1)
+
+
+class TestExtendedTradingMinutesWindow:
+    def test_premarket_window_uses_extended_grid(self) -> None:
+        end = datetime(2024, 6, 3, 13, 30, tzinfo=UTC)
+        start, resolved_end = extended_trading_minutes_window(end, 330)
+        assert resolved_end == end
+        assert start == datetime(2024, 6, 3, 8, 0, tzinfo=UTC)
+
+    def test_extended_grid_respects_dst(self) -> None:
+        before_dst_start, _ = extended_trading_minutes_window(
+            datetime(2024, 3, 8, 14, 30, tzinfo=UTC), 330
+        )
+        after_dst_start, _ = extended_trading_minutes_window(
+            datetime(2024, 3, 11, 13, 30, tzinfo=UTC), 330
+        )
+        assert before_dst_start == datetime(2024, 3, 8, 9, 0, tzinfo=UTC)
+        assert after_dst_start == datetime(2024, 3, 11, 8, 0, tzinfo=UTC)
+
+    def test_rejects_zero_or_negative_n(self) -> None:
+        end = datetime(2024, 6, 3, 20, 0, tzinfo=UTC)
+        with pytest.raises(ValueError, match="positive"):
+            extended_trading_minutes_window(end, 0)
 
 
 class TestTradingSessionsWindow:

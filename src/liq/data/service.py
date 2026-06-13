@@ -686,7 +686,61 @@ class DataService:
         prov = self._get_provider(provider)
         return prov.validate_credentials()
 
-    # ----- universe sync ------------------------------------------------
+    # ----- universe resolution / sync ----------------------------------
+
+    def resolve_universe(
+        self,
+        universe_ref: Any,
+        *,
+        as_of: date,
+        registry: Any | None = None,
+    ) -> Any:
+        """Resolve a universe reference as-of a date.
+
+        Accepts three input shapes for caller convenience:
+
+        * :class:`UniverseDefinition` — used verbatim.
+        * ``list[str]`` of symbols — wrapped in an explicit definition.
+        * ``str`` name — looked up in ``registry``; raises ``ValueError``
+          if no registry is supplied.
+
+        Returns a :class:`ResolvedUniverse` whose ``symbols`` are
+        normalized (uppercase, deduped, sorted) and whose ``pit`` flag
+        carries the constituent-source semantics.
+        """
+        from liq.data.universes import (
+            InMemoryStubSource,
+            UniverseDefinition,
+            UniverseKind,
+            UniverseRegistry,
+            UniverseResolver,
+        )
+
+        if isinstance(universe_ref, UniverseDefinition):
+            definition = universe_ref
+        elif isinstance(universe_ref, list):
+            definition = UniverseDefinition(
+                name="adhoc",
+                version=1,
+                kind=UniverseKind.EXPLICIT,
+                spec={"symbols": [str(s) for s in universe_ref]},
+            )
+        else:
+            reg = registry if isinstance(registry, UniverseRegistry) else None
+            if reg is None:
+                raise ValueError(
+                    "resolve_universe() with a universe name requires a UniverseRegistry"
+                )
+            definition = reg.load(str(universe_ref))
+
+        named_universes = None
+        if isinstance(registry, UniverseRegistry):
+            named_universes = {n: registry.load(n) for n in registry.list_names()}
+
+        return UniverseResolver(
+            constituent_source=InMemoryStubSource(),
+            named_universes=named_universes,
+        ).resolve(definition, as_of=as_of)
 
     def sync(
         self,

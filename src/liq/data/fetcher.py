@@ -75,6 +75,7 @@ class DataFetcher:
         self._rate_limiter = RateLimiter(
             requests_per_minute=policy.requests_per_minute if policy else None,
             burst=policy.burst if policy else None,
+            min_interval_seconds=policy.min_interval_seconds if policy else None,
         )
 
     @property

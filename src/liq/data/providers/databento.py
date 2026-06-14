@@ -60,8 +60,15 @@ from uuid import uuid4
 import polars as pl
 from tenacity import RetryCallState, Retrying, retry_if_exception_type, stop_after_attempt
 
-from liq.data.exceptions import DataQualityError, ProviderError
+from liq.data.exceptions import DataQualityError, ProviderError, ProviderNoDataError
+from liq.data.protocols import BatchJob
 from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE, BaseProvider
+from liq.data.sync_events import (
+    EVENT_BATCH_DOWNLOAD_STARTED,
+    EVENT_BATCH_POLLING,
+    EVENT_BATCH_RESUMED,
+    EVENT_BATCH_SUBMITTED,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from liq.store.protocols import TimeSeriesStore
@@ -288,6 +295,89 @@ def _q9_to_decimal(value_q9: int) -> Decimal:
     return (Decimal(value_q9) / DATABENTO_PRICE_SCALE).quantize(_PRICE_QUANT)
 
 
+_DBN_FILE_SUFFIXES = (".dbn", ".dbn.zst", ".dbn.gz")
+
+
+class _MergedDBNStore:
+    """Normalize downloaded DBN path returns.
+
+    ``Databento.HistoricalBatch.download(...)`` can return a single
+    path, a directory path, or a sequence of paths depending on SDK
+    version and extraction shape. Older fakes returned a single
+    store-like object instead.
+
+    Non-DBN files (manifest.json, symbology.json) in the download list
+    are skipped; ``DBNStore.from_file`` would otherwise raise on them.
+    """
+
+    def __init__(self, paths: list[Path]) -> None:
+        self._paths = [p for p in paths if str(p).endswith(_DBN_FILE_SUFFIXES)]
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return tuple(self._paths)
+
+    @classmethod
+    def from_download_result(cls, raw: Any) -> Any:
+        """Wrap path-shaped SDK returns, or leave store-shaped fakes alone."""
+        paths = cls._coerce_paths(raw)
+        if paths is not None:
+            return cls(paths)
+        return raw
+
+    @staticmethod
+    def _coerce_paths(raw: Any) -> list[Path] | None:
+        if isinstance(raw, str | os.PathLike):
+            path = Path(raw)
+            return sorted(path.rglob("*")) if path.is_dir() else [path]
+        if isinstance(raw, list | tuple | set) and all(
+            isinstance(p, str | os.PathLike) for p in raw
+        ):
+            out: list[Path] = []
+            for item in raw:
+                path = Path(item)
+                if path.is_dir():
+                    out.extend(sorted(path.rglob("*")))
+                else:
+                    out.append(path)
+            return out
+        return None
+
+
+@dataclass(frozen=True)
+class _MaterializedDBNStore:
+    """In-memory snapshot of a batch download's records + symbology.
+
+    Built inside :meth:`DatabentoProvider._invoke_batch` while the
+    staging directory is still alive; once the staging
+    ``TemporaryDirectory`` exits, the source ``.dbn.zst`` files are
+    gone. The snapshot satisfies the downstream duck-typed contract
+    (``__iter__``, ``.symbology``, ``.metadata``) so
+    ``_extract_records`` / ``_persist_symbology`` /
+    ``_verify_response_schema`` work without further changes.
+    """
+
+    records: tuple[DatabentoBarRecord, ...]
+    symbology: dict[str, Any]
+    schema_name: str | None
+
+    def __iter__(self) -> Any:
+        return iter(self.records)
+
+    @property
+    def metadata(self) -> Any:
+        class _Meta:
+            pass
+
+        m = _Meta()
+        m.schema = self.schema_name  # type: ignore[attr-defined]
+        return m
+
+    @property
+    def schema(self) -> str | None:
+        return self.schema_name
+
+
 def _records_to_dataframe(records: list[DatabentoBarRecord]) -> pl.DataFrame:
     """Build a typed polars DataFrame from a list of Databento bar records.
 
@@ -495,6 +585,31 @@ def _read_status_code(exc: Exception) -> int | None:
     return None
 
 
+def _is_no_data_error(exc: Exception) -> bool:
+    """Return true for Databento terminal 422 no-data/symbology misses."""
+    if _read_status_code(exc) != 422:
+        return False
+    text_parts = [str(exc)]
+    for attr in ("json_body", "http_body", "body", "content"):
+        raw = getattr(exc, attr, None)
+        if raw is None:
+            continue
+        if isinstance(raw, bytes):
+            text_parts.append(raw.decode("utf-8", errors="ignore"))
+        else:
+            text_parts.append(str(raw))
+    text = " ".join(text_parts).lower()
+    return any(
+        needle in text
+        for needle in (
+            "data_no_data_found_for_request",
+            "symbology_invalid_request",
+            "no data was found",
+            "none of the symbols could be resolved",
+        )
+    )
+
+
 def _read_retry_after_seconds(exc: Exception) -> float | None:
     """Read ``Retry-After`` as seconds from an SDK or HTTP exception."""
     candidates = [exc, getattr(exc, "response", None)]
@@ -549,6 +664,15 @@ def _filter_day(df: pl.DataFrame, when: date) -> pl.DataFrame:
     start_dt = datetime(when.year, when.month, when.day, tzinfo=UTC)
     end_dt = start_dt + timedelta(days=1)
     return df.filter((pl.col("timestamp") >= start_dt) & (pl.col("timestamp") < end_dt))
+
+
+def _databento_raw_symbol(symbol: str) -> str:
+    """Convert common class-share notation to Databento raw_symbol form."""
+    return symbol.replace("-", ".")
+
+
+def _same_databento_symbol(left: str, right: str) -> bool:
+    return _databento_raw_symbol(left).upper() == _databento_raw_symbol(right).upper()
 
 
 # ----- provider --------------------------------------------------------------
@@ -704,6 +828,101 @@ class DatabentoProvider(BaseProvider):
         )
         return df
 
+    # ----- external batch orchestration ---------------------------------
+
+    def submit_batch_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        timeframe: str = "1d",
+        *,
+        dataset: str,
+        sync_run_id: str | None = None,
+    ) -> BatchJob:
+        """Submit or resume a Databento batch bars job without waiting."""
+        if not symbol:
+            raise ValueError("symbol must be non-empty")
+        if end < start:
+            raise ValueError(f"end ({end}) must be >= start ({start})")
+        schema = self._resolve_schema(timeframe)
+        start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
+        end_dt = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=UTC)
+        return self._call_with_retry(
+            lambda: self._submit_or_resume_batch_job(
+                client=self._get_client(),
+                dataset=dataset,
+                symbol=symbol,
+                schema=schema,
+                timeframe=timeframe,
+                start=start_dt,
+                end=end_dt,
+            ),
+            sync_run_id=sync_run_id or str(uuid4()),
+            dataset=dataset,
+            symbol=symbol,
+            request_kind="batch_submit",
+        )
+
+    def poll_batch_bars(
+        self,
+        job: BatchJob,
+        *,
+        sync_run_id: str | None = None,
+    ) -> bool:
+        """Return True when a submitted Databento batch job is ready."""
+        return bool(
+            self._call_with_retry(
+                lambda: self._poll_batch_job(self._get_client(), job),
+                sync_run_id=sync_run_id or str(uuid4()),
+                dataset=job.dataset,
+                symbol=job.symbol,
+                request_kind="batch_poll",
+            )
+        )
+
+    def fetch_completed_batch_bars(
+        self,
+        job: BatchJob,
+        *,
+        sync_run_id: str | None = None,
+    ) -> pl.DataFrame:
+        """Download and materialize a completed Databento batch job."""
+        t0 = time.monotonic()
+        store = self._call_with_retry(
+            lambda: self._download_batch_job(self._get_client(), job),
+            sync_run_id=sync_run_id or str(uuid4()),
+            dataset=job.dataset,
+            symbol=job.symbol,
+            request_kind="batch_download",
+        )
+        expected_schema = str(job.metadata.get("schema") or self._resolve_schema(job.timeframe))
+        self._verify_response_schema(store, expected=expected_schema)
+        records = self._extract_records(store, fallback_symbol=job.symbol)
+        df = _records_to_dataframe(records)
+        self._persist_symbology(store)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        bytes_in = _estimate_bytes_in(store=store, rows=df.height)
+        _logger.info(
+            "databento fetch %s/%s %d records",
+            job.dataset,
+            job.symbol,
+            df.height,
+            extra={
+                "event": "databento_fetch",
+                "provider": self.name,
+                "dataset": job.dataset,
+                "symbols_count": 1,
+                "start": job.start.date().isoformat(),
+                "end": job.end.date().isoformat(),
+                "request_kind": "batch",
+                "bytes_in": bytes_in,
+                "duration_ms": duration_ms,
+                "sync_run_id": sync_run_id or "",
+            },
+        )
+        return df
+
     # ----- retry + schema verification ----------------------------------
 
     def _call_with_retry(
@@ -749,6 +968,8 @@ class DatabentoProvider(BaseProvider):
         except DatabentoTransientError:
             raise
         except Exception as exc:
+            if _is_no_data_error(exc):
+                raise ProviderNoDataError(str(exc)) from exc
             transient = self._coerce_transient_error(exc)
             if transient is None:
                 raise
@@ -963,7 +1184,7 @@ class DatabentoProvider(BaseProvider):
         if request_kind == "get_range":
             return client.timeseries.get_range(
                 dataset=dataset,
-                symbols=[symbol],
+                symbols=[_databento_raw_symbol(symbol)],
                 schema=schema,
                 start=start,
                 end=end,
@@ -1052,15 +1273,38 @@ class DatabentoProvider(BaseProvider):
         noisy); the wrapping ``databento_fetch`` event still captures
         the duration_ms of the whole call.
         """
+        job = self._submit_or_resume_batch_job(
+            client=client,
+            dataset=dataset,
+            symbol=symbol,
+            schema=schema,
+            timeframe=self._timeframe_for_schema(schema),
+            start=start,
+            end=end,
+        )
+        while not self._poll_batch_job(client, job):
+            self._sleep_fn(self.batch_poll_seconds)
+        return self._download_batch_job(client, job)
+
+    def _submit_or_resume_batch_job(
+        self,
+        *,
+        client: Any,
+        dataset: str,
+        symbol: str,
+        schema: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> BatchJob:
         signature = self._batch_signature(
             dataset=dataset, symbol=symbol, schema=schema, start=start, end=end
         )
-
         marker = self._load_marker(signature)
         if marker is None:
             job = client.batch.submit_job(
                 dataset=dataset,
-                symbols=[symbol],
+                symbols=[_databento_raw_symbol(symbol)],
                 schema=schema,
                 start=start,
                 end=end,
@@ -1081,29 +1325,148 @@ class DatabentoProvider(BaseProvider):
             if not marker.job_id:
                 raise DatabentoError("Databento batch submission did not return a job id")
             self._save_marker(marker)
+            _logger.info(
+                "databento batch submitted",
+                extra={
+                    "event": EVENT_BATCH_SUBMITTED,
+                    "provider": self.name,
+                    "dataset": dataset,
+                    "symbol": symbol,
+                    "job_id": marker.job_id,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                },
+            )
+        else:
+            _logger.info(
+                "databento batch resumed",
+                extra={
+                    "event": EVENT_BATCH_RESUMED,
+                    "provider": self.name,
+                    "dataset": dataset,
+                    "symbol": symbol,
+                    "job_id": marker.job_id,
+                },
+            )
+        return BatchJob(
+            provider=self.name,
+            job_id=marker.job_id,
+            signature=signature,
+            dataset=dataset,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            metadata={"schema": schema},
+        )
 
-        # Poll until done. The fake batch client returns "done"
-        # immediately by default; real Databento moves through
-        # received → queued → processing → done.
+    def _poll_batch_job(self, client: Any, job: BatchJob) -> bool:
         terminal_states = {"done", "completed"}
         failed_states = {"canceled", "cancelled", "expired", "failed"}
-        while True:
-            details = client.batch.get_job_details(marker.job_id)
-            state = str(details.get("state") or "")
-            if state.lower() in terminal_states:
-                break
-            if state.lower() in failed_states:
-                self._delete_marker(signature)
-                raise DatabentoError(
-                    f"Databento batch job {marker.job_id!r} ended in state {state!r}"
-                )
-            self._sleep_fn(self.batch_poll_seconds)
+        details = client.batch.get_job_details(job.job_id)
+        state = str(details.get("state") or "")
+        if state.lower() in terminal_states:
+            return True
+        if state.lower() in failed_states:
+            self._delete_marker(job.signature)
+            raise DatabentoError(f"Databento batch job {job.job_id!r} ended in state {state!r}")
+        _logger.info(
+            "databento batch polling",
+            extra={
+                "event": EVENT_BATCH_POLLING,
+                "provider": self.name,
+                "job_id": job.job_id,
+                "state": state,
+            },
+        )
+        return False
 
-        store = client.batch.download(job_id=marker.job_id)
-        # Only delete the marker after the download returns cleanly.
-        # If ``download`` raised, the marker stays so we can resume.
-        self._delete_marker(signature)
+    def _download_batch_job(self, client: Any, job: BatchJob) -> Any:
+        # Stage the download into a per-call ``TemporaryDirectory`` so
+        # the raw ``.dbn.zst`` files are auto-deleted on exit (success
+        # OR exception). The marker stays on the persistent path so a
+        # mid-flight failure can still resume without re-billing.
+        with tempfile.TemporaryDirectory(prefix="liq-data-databento-") as staging:
+            _logger.info(
+                "databento batch download started",
+                extra={
+                    "event": EVENT_BATCH_DOWNLOAD_STARTED,
+                    "provider": self.name,
+                    "job_id": job.job_id,
+                    "output_dir": staging,
+                },
+            )
+            raw = client.batch.download(job_id=job.job_id, output_dir=staging)
+            # Real SDK returns ``list[Path]`` of extracted ``.dbn.zst``
+            # files; legacy fakes return a store-like object directly.
+            merged = _MergedDBNStore.from_download_result(raw)
+            if isinstance(merged, _MergedDBNStore):
+                # Materialize records + symbology while the source files
+                # are still on disk; each DBN chunk is opened and closed
+                # independently to avoid exhausting file handles.
+                store: Any = self._materialize_downloaded_batch(merged, fallback_symbol=job.symbol)
+            else:
+                # Legacy fake — already in-memory; nothing to materialize.
+                store = merged
+
+        # Staging dir is gone. Now safe to drop the resume marker —
+        # the records are entirely in memory.
+        self._delete_marker(job.signature)
         return store
+
+    @staticmethod
+    def _timeframe_for_schema(schema: str) -> str:
+        for timeframe, candidate in SCHEMA_BY_TIMEFRAME.items():
+            if candidate == schema:
+                return timeframe
+        return schema
+
+    def _materialize_downloaded_batch(
+        self,
+        merged: _MergedDBNStore,
+        *,
+        fallback_symbol: str,
+    ) -> _MaterializedDBNStore:
+        """Read downloaded DBN chunks without holding every file open."""
+        import databento as db  # noqa: PLC0415 — import only when batch path runs
+
+        records: list[DatabentoBarRecord] = []
+        merged_mappings: dict[str, Any] = {}
+        schema_name: str | None = None
+        for path in merged.paths:
+            store = db.DBNStore.from_file(str(path))
+            try:
+                if schema_name is None:
+                    meta = getattr(store, "metadata", None)
+                    raw_schema = getattr(store, "schema", None) or (
+                        getattr(meta, "schema", None) if meta else None
+                    )
+                    schema_name = str(raw_schema) if raw_schema else None
+                records.extend(self._extract_records(store, fallback_symbol=fallback_symbol))
+                self._merge_batch_symbology(merged_mappings, store)
+            finally:
+                close = getattr(store, "close", None)
+                if callable(close):
+                    close()
+
+        return _MaterializedDBNStore(
+            records=tuple(records),
+            symbology={"mappings": merged_mappings},
+            schema_name=schema_name,
+        )
+
+    @staticmethod
+    def _merge_batch_symbology(merged_mappings: dict[str, Any], store: Any) -> None:
+        sym = getattr(store, "symbology", None) or {}
+        if not isinstance(sym, dict):
+            return
+        mappings = sym.get("mappings")
+        if isinstance(mappings, dict):
+            merged_mappings.update(mappings)
+            return
+        for key, value in sym.items():
+            if key != "mappings":
+                merged_mappings.setdefault(key, value)
 
     def _extract_records(
         self,
@@ -1138,10 +1501,28 @@ class DatabentoProvider(BaseProvider):
         records: list[DatabentoBarRecord] = []
         for msg in raw_iter:
             if isinstance(msg, DatabentoBarRecord):
-                records.append(msg)
+                symbol = (
+                    fallback_symbol
+                    if _same_databento_symbol(msg.symbol, fallback_symbol)
+                    else msg.symbol
+                )
+                records.append(
+                    DatabentoBarRecord(
+                        ts_event_ns=msg.ts_event_ns,
+                        instrument_id=msg.instrument_id,
+                        open_q9=msg.open_q9,
+                        high_q9=msg.high_q9,
+                        low_q9=msg.low_q9,
+                        close_q9=msg.close_q9,
+                        volume=msg.volume,
+                        symbol=symbol,
+                    )
+                )
                 continue
             instrument_id = int(msg.instrument_id)
             symbol = symbol_map.get(instrument_id) or fallback_symbol
+            if _same_databento_symbol(str(symbol), fallback_symbol):
+                symbol = fallback_symbol
             records.append(
                 DatabentoBarRecord(
                     ts_event_ns=int(msg.ts_event),

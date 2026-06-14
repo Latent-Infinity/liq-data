@@ -4,10 +4,26 @@ This module defines the MarketDataProvider protocol that all data providers
 must implement to be usable with the LIQ data pipeline.
 """
 
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Protocol, runtime_checkable
 
 import polars as pl
+
+
+@dataclass(frozen=True, slots=True)
+class BatchJob:
+    """Provider-agnostic handle for a submitted batch bars request."""
+
+    provider: str
+    job_id: str
+    signature: str
+    dataset: str
+    symbol: str
+    timeframe: str
+    start: datetime
+    end: datetime
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -113,6 +129,47 @@ class MarketDataProvider(Protocol):
 
     def fetch_instruments(self, asset_class: str) -> list[Any]:
         """Fetch instruments metadata for an asset class."""
+        ...
+
+
+@runtime_checkable
+class BatchMarketDataProvider(MarketDataProvider, Protocol):
+    """Optional provider capability for externally orchestrated batch bars."""
+
+    @property
+    def batch_poll_seconds(self) -> float:
+        """Recommended pause between polling passes."""
+        ...
+
+    def submit_batch_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        timeframe: str = "1d",
+        *,
+        dataset: str,
+        sync_run_id: str | None = None,
+    ) -> BatchJob:
+        """Submit or resume a durable batch bars job."""
+        ...
+
+    def poll_batch_bars(
+        self,
+        job: BatchJob,
+        *,
+        sync_run_id: str | None = None,
+    ) -> bool:
+        """Return True when the batch job is ready to download."""
+        ...
+
+    def fetch_completed_batch_bars(
+        self,
+        job: BatchJob,
+        *,
+        sync_run_id: str | None = None,
+    ) -> pl.DataFrame:
+        """Download and materialize a completed batch bars job."""
         ...
 
 

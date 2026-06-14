@@ -49,6 +49,12 @@ class ProviderUnavailableError(ProviderError):
     pass
 
 
+class ProviderNoDataError(ProviderError):
+    """Provider confirms no data is available for the request."""
+
+    pass
+
+
 class SchemaValidationError(ValidationError):
     """Schema or field validation failed."""
 

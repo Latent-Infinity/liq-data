@@ -209,6 +209,13 @@ __marimo__/
 # Local data artifacts (but allow src/liq/data/ package)
 /data/
 
+# Databento batch staging artifacts that escaped to the repo root.
+# Normal ingestion uses a per-call ``tempfile.TemporaryDirectory()``
+# that is auto-deleted on exit (see ``providers/databento.py``
+# ``_invoke_batch``). The /EQUS-*/ guard catches stray runs from
+# earlier code that downloaded into ``Path.cwd()``.
+/EQUS-*/
+
 # macOS finder junk
 .DS_Store
 

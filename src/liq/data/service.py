@@ -32,8 +32,10 @@ Example:
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, overload
@@ -42,8 +44,12 @@ import polars as pl
 from filelock import FileLock, Timeout
 
 from liq.data.aggregation import aggregate_bars
+from liq.data.exceptions import ProviderNoDataError
 from liq.data.gaps import detect_gaps
+from liq.data.policies import POLICIES
+from liq.data.protocols import BatchJob, BatchMarketDataProvider
 from liq.data.qa import validate_ohlc
+from liq.data.rate_limiter import RateLimiter
 from liq.data.settings import (
     LiqDataSettings,
     create_alpaca_provider,
@@ -61,6 +67,11 @@ from liq.data.sync_events import (
     EVENT_MANIFEST_RANGE_APPENDED,
     EVENT_MANIFEST_ROLLBACK,
     EVENT_PIT_WARNING,
+    EVENT_SYMBOL_COMPLETED,
+    EVENT_SYMBOL_FAILED,
+    EVENT_SYMBOL_STARTED,
+    EVENT_SYNC_COMPLETED,
+    EVENT_SYNC_STARTED,
     EVENT_UNIVERSE_RESOLVED,
     SyncLockedError,
 )
@@ -71,6 +82,13 @@ if TYPE_CHECKING:
     from liq.data.protocols import MarketDataProvider
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _BatchSyncWork:
+    symbol: str
+    start: datetime
+    end: datetime
 
 
 class DataService:
@@ -818,6 +836,16 @@ class DataService:
             "timeframe": timeframe,
         }
         logger.info(
+            "sync started",
+            extra={
+                **log_base,
+                "event": EVENT_SYNC_STARTED,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "force_refresh": force_refresh,
+            },
+        )
+        logger.info(
             "universe resolved",
             extra={
                 **log_base,
@@ -857,6 +885,12 @@ class DataService:
 
         try:
             prov = self._get_provider(provider)
+            policy = POLICIES.get(provider)
+            rate_limiter = RateLimiter(
+                requests_per_minute=policy.requests_per_minute if policy else None,
+                burst=policy.burst if policy else None,
+                min_interval_seconds=policy.min_interval_seconds if policy else None,
+            )
             fetched_at = datetime.now(UTC)
             api_calls = 0
             manifest_gaps_total = 0
@@ -891,10 +925,21 @@ class DataService:
                         "gaps_count": len(gaps),
                     },
                 )
+                logger.info(
+                    "symbol started",
+                    extra={
+                        **log_base,
+                        "event": EVENT_SYMBOL_STARTED,
+                        "symbol": symbol,
+                        "gaps_count": len(gaps),
+                    },
+                )
+                symbol_rows = 0
 
                 try:
                     with manifest.transaction() as txn:
                         for gap_start, gap_end in gaps:
+                            rate_limiter.acquire()
                             df = prov.fetch_bars(
                                 symbol,
                                 gap_start.date(),
@@ -903,6 +948,7 @@ class DataService:
                             )
                             api_calls += 1
                             rows_fetched += df.height
+                            symbol_rows += df.height
                             if not df.is_empty():
                                 storage_key = self._storage_key(provider, symbol, timeframe)
                                 write_mode = "overwrite" if force_refresh else "append"
@@ -936,7 +982,39 @@ class DataService:
                             "error_message": str(exc),
                         },
                     )
+                    logger.error(
+                        "symbol failed",
+                        extra={
+                            **log_base,
+                            "event": EVENT_SYMBOL_FAILED,
+                            "symbol": symbol,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                    )
                     raise
+                logger.info(
+                    "symbol completed",
+                    extra={
+                        **log_base,
+                        "event": EVENT_SYMBOL_COMPLETED,
+                        "symbol": symbol,
+                        "rows": symbol_rows,
+                        "gaps_count": len(gaps),
+                    },
+                )
+
+            logger.info(
+                "sync completed",
+                extra={
+                    **log_base,
+                    "event": EVENT_SYNC_COMPLETED,
+                    "symbols": len(resolved.symbols),
+                    "api_calls": api_calls,
+                    "rows_fetched": rows_fetched,
+                    "manifest_gaps": manifest_gaps_total,
+                },
+            )
 
             return {
                 "symbols": len(resolved.symbols),
@@ -946,6 +1024,378 @@ class DataService:
                 "force_refresh": force_refresh,
                 "pit": resolved.pit,
                 "sync_run_id": sync_run_id,
+            }
+        finally:
+            if lock_acquired:
+                lock.release()
+
+    def sync_batch(
+        self,
+        universe: Any,
+        *,
+        start: date,
+        end: date,
+        provider: str,
+        timeframe: str,
+        dataset: str,
+        force_refresh: bool = False,
+        registry: Any | None = None,
+        as_of: date | None = None,
+        max_in_flight: int = 4,
+        lock_timeout: float = 60.0,
+        poll_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        """Sync a universe using a provider's external batch lifecycle.
+
+        Providers opt in via :class:`BatchMarketDataProvider`: submit a
+        durable batch job, poll until it is ready, then download/materialize
+        it. The service owns orchestration, manifest transactions, storage
+        writes, and progress events, so the same recovery semantics as
+        :meth:`sync` apply after each completed batch is downloaded.
+        """
+        from liq.data.manifest import CoverageManifest, CoverageRange
+        from liq.data.universes import (
+            InMemoryStubSource,
+            UniverseDefinition,
+            UniverseRegistry,
+            UniverseResolver,
+        )
+
+        if max_in_flight < 1:
+            raise ValueError(f"max_in_flight must be >= 1, got {max_in_flight}")
+
+        if isinstance(universe, UniverseDefinition):
+            definition = universe
+        else:
+            reg = registry if isinstance(registry, UniverseRegistry) else None
+            if reg is None:
+                raise ValueError("sync_batch() with a universe name requires a UniverseRegistry")
+            definition = reg.load(str(universe))
+        named_universes = None
+        if isinstance(registry, UniverseRegistry):
+            named_universes = {name: registry.load(name) for name in registry.list_names()}
+
+        resolved = UniverseResolver(
+            constituent_source=InMemoryStubSource(),
+            named_universes=named_universes,
+        ).resolve(definition, as_of=as_of or end)
+
+        sync_run_id = uuid.uuid4().hex
+        log_base: dict[str, Any] = {
+            "sync_run_id": sync_run_id,
+            "universe": definition.name,
+            "version": definition.version,
+            "kind": definition.kind.value,
+            "provider": provider,
+            "dataset": dataset,
+            "timeframe": timeframe,
+        }
+        logger.info(
+            "sync started",
+            extra={
+                **log_base,
+                "event": EVENT_SYNC_STARTED,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "force_refresh": force_refresh,
+                "orchestration": "batch",
+                "max_in_flight": max_in_flight,
+            },
+        )
+        logger.info(
+            "universe resolved",
+            extra={
+                **log_base,
+                "event": EVENT_UNIVERSE_RESOLVED,
+                "symbols_count": len(resolved.symbols),
+                "as_of": resolved.as_of.isoformat(),
+                "pit": resolved.pit,
+            },
+        )
+        if not resolved.pit:
+            logger.warning(
+                "non-PIT universe; downstream sweeps will reject",
+                extra={
+                    **log_base,
+                    "event": EVENT_PIT_WARNING,
+                    "reason": "constituent source did not advertise PIT membership",
+                },
+            )
+
+        lock_path = (
+            self._data_root
+            / "locks"
+            / "sync"
+            / f"{provider}--{dataset}--{timeframe}--{definition.name}.lock"
+        )
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(lock_path), timeout=lock_timeout)
+        lock_acquired = False
+        try:
+            lock.acquire()
+            lock_acquired = True
+        except Timeout as exc:
+            raise SyncLockedError(
+                f"sync lock held for {provider}/{dataset}/{timeframe}/{definition.name}; "
+                f"waited {lock_timeout}s"
+            ) from exc
+
+        try:
+            prov = self._get_provider(provider)
+            if not all(
+                callable(getattr(prov, name, None))
+                for name in (
+                    "submit_batch_bars",
+                    "poll_batch_bars",
+                    "fetch_completed_batch_bars",
+                )
+            ):
+                raise ValueError(f"Provider {provider!r} does not support batch orchestration")
+            batch_provider = cast(BatchMarketDataProvider, prov)
+            policy = POLICIES.get(provider)
+            rate_limiter = RateLimiter(
+                requests_per_minute=policy.requests_per_minute if policy else None,
+                burst=policy.burst if policy else None,
+                min_interval_seconds=policy.min_interval_seconds if policy else None,
+            )
+            fetched_at = datetime.now(UTC)
+            api_calls = 0
+            manifest_gaps_total = 0
+            rows_fetched = 0
+            symbols_skipped = 0
+            skipped_symbols: list[str] = []
+            request_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
+            request_end = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
+
+            pending: list[_BatchSyncWork] = []
+            symbol_rows: dict[str, int] = {}
+            symbol_remaining: dict[str, int] = {}
+            symbol_gap_counts: dict[str, int] = {}
+            for symbol in resolved.symbols:
+                manifest = CoverageManifest.load(
+                    root=self._data_root,
+                    provider=provider,
+                    dataset=dataset,
+                    timeframe=timeframe,
+                    symbol=symbol,
+                )
+                gaps = (
+                    [(request_start, request_end)]
+                    if force_refresh
+                    else manifest.gaps(start=request_start, end=request_end)
+                )
+                manifest_gaps_total += len(gaps)
+                if not gaps:
+                    continue
+                logger.info(
+                    "manifest gaps detected",
+                    extra={
+                        **log_base,
+                        "event": EVENT_MANIFEST_GAP_DETECTED,
+                        "symbol": symbol,
+                        "gaps_count": len(gaps),
+                    },
+                )
+                logger.info(
+                    "symbol started",
+                    extra={
+                        **log_base,
+                        "event": EVENT_SYMBOL_STARTED,
+                        "symbol": symbol,
+                        "gaps_count": len(gaps),
+                    },
+                )
+                symbol_rows[symbol] = 0
+                symbol_remaining[symbol] = len(gaps)
+                symbol_gap_counts[symbol] = len(gaps)
+                pending.extend(_BatchSyncWork(symbol=symbol, start=a, end=b) for a, b in gaps)
+
+            active: dict[str, tuple[BatchJob, _BatchSyncWork]] = {}
+            pause = (
+                poll_seconds
+                if poll_seconds is not None
+                else float(getattr(batch_provider, "batch_poll_seconds", 5.0))
+            )
+            while pending or active:
+                while pending and len(active) < max_in_flight:
+                    work = pending.pop(0)
+                    rate_limiter.acquire()
+                    try:
+                        job = batch_provider.submit_batch_bars(
+                            work.symbol,
+                            work.start.date(),
+                            work.end.date(),
+                            timeframe,
+                            dataset=dataset,
+                            sync_run_id=sync_run_id,
+                        )
+                    except Exception as exc:
+                        # Surface the failing symbol before propagating so
+                        # log readers can correlate the abort with one
+                        # row of the universe rather than discovering it
+                        # via stacktrace alone.
+                        logger.error(
+                            "symbol failed",
+                            extra={
+                                **log_base,
+                                "event": EVENT_SYMBOL_FAILED,
+                                "symbol": work.symbol,
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                                "stage": "submit",
+                            },
+                        )
+                        if isinstance(exc, ProviderNoDataError):
+                            symbols_skipped += 1
+                            skipped_symbols.append(work.symbol)
+                            symbol_remaining[work.symbol] -= 1
+                            if symbol_remaining[work.symbol] == 0:
+                                logger.info(
+                                    "symbol completed",
+                                    extra={
+                                        **log_base,
+                                        "event": EVENT_SYMBOL_COMPLETED,
+                                        "symbol": work.symbol,
+                                        "rows": 0,
+                                        "gaps_count": symbol_gap_counts[work.symbol],
+                                        "skipped": True,
+                                    },
+                                )
+                            continue
+                        raise
+                    active[job.signature] = (job, work)
+
+                # Polling is a status check, not a billable data request.
+                # If we charged it to the rate limiter, a high
+                # ``max_in_flight`` value would burn through the per-
+                # minute budget on poll ticks alone and starve the
+                # actual submits + downloads. The provider's
+                # ``poll_batch_bars`` already retries transient SDK
+                # failures internally.
+                completed: list[str] = []
+                for signature, (job, work) in list(active.items()):
+                    try:
+                        ready = batch_provider.poll_batch_bars(job, sync_run_id=sync_run_id)
+                    except Exception as exc:
+                        logger.error(
+                            "symbol failed",
+                            extra={
+                                **log_base,
+                                "event": EVENT_SYMBOL_FAILED,
+                                "symbol": work.symbol,
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                                "stage": "poll",
+                            },
+                        )
+                        raise
+                    if ready:
+                        completed.append(signature)
+
+                if not completed:
+                    if active and pause > 0:
+                        time.sleep(pause)
+                    continue
+
+                for signature in completed:
+                    job, work = active.pop(signature)
+                    manifest = CoverageManifest.load(
+                        root=self._data_root,
+                        provider=provider,
+                        dataset=dataset,
+                        timeframe=timeframe,
+                        symbol=work.symbol,
+                    )
+                    try:
+                        with manifest.transaction() as txn:
+                            rate_limiter.acquire()
+                            df = batch_provider.fetch_completed_batch_bars(
+                                job, sync_run_id=sync_run_id
+                            )
+                            api_calls += 1
+                            rows_fetched += df.height
+                            symbol_rows[work.symbol] += df.height
+                            if not df.is_empty():
+                                storage_key = self._storage_key(provider, work.symbol, timeframe)
+                                write_mode = "overwrite" if force_refresh else "append"
+                                self._store.write(storage_key, df, mode=write_mode)
+                            txn.record(
+                                CoverageRange(
+                                    start=work.start,
+                                    end=work.end,
+                                    fetched_at=fetched_at,
+                                )
+                            )
+                            logger.info(
+                                "manifest range appended",
+                                extra={
+                                    **log_base,
+                                    "event": EVENT_MANIFEST_RANGE_APPENDED,
+                                    "symbol": work.symbol,
+                                    "start": work.start.isoformat(),
+                                    "end": work.end.isoformat(),
+                                    "rows": df.height,
+                                },
+                            )
+                    except Exception as exc:
+                        logger.error(
+                            "manifest rollback",
+                            extra={
+                                **log_base,
+                                "event": EVENT_MANIFEST_ROLLBACK,
+                                "symbol": work.symbol,
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                            },
+                        )
+                        logger.error(
+                            "symbol failed",
+                            extra={
+                                **log_base,
+                                "event": EVENT_SYMBOL_FAILED,
+                                "symbol": work.symbol,
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                            },
+                        )
+                        raise
+                    symbol_remaining[work.symbol] -= 1
+                    if symbol_remaining[work.symbol] == 0:
+                        logger.info(
+                            "symbol completed",
+                            extra={
+                                **log_base,
+                                "event": EVENT_SYMBOL_COMPLETED,
+                                "symbol": work.symbol,
+                                "rows": symbol_rows[work.symbol],
+                                "gaps_count": symbol_gap_counts[work.symbol],
+                            },
+                        )
+
+            logger.info(
+                "sync completed",
+                extra={
+                    **log_base,
+                    "event": EVENT_SYNC_COMPLETED,
+                    "symbols": len(resolved.symbols),
+                    "api_calls": api_calls,
+                    "rows_fetched": rows_fetched,
+                    "manifest_gaps": manifest_gaps_total,
+                    "symbols_skipped": symbols_skipped,
+                },
+            )
+            return {
+                "symbols": len(resolved.symbols),
+                "api_calls": api_calls,
+                "manifest_gaps": manifest_gaps_total,
+                "rows_fetched": rows_fetched,
+                "force_refresh": force_refresh,
+                "pit": resolved.pit,
+                "sync_run_id": sync_run_id,
+                "orchestration": "batch",
+                "max_in_flight": max_in_flight,
+                "symbols_skipped": symbols_skipped,
+                "skipped_symbols": skipped_symbols,
             }
         finally:
             if lock_acquired:

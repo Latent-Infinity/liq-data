@@ -189,6 +189,23 @@ def sync_universe(
         "--i-have-budget-authorization",
         help="Required when ``--force-refresh`` would re-bill the venue",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Stream per-symbol + per-batch progress events to stderr.",
+    ),
+    orchestration: str = typer.Option(
+        "serial",
+        "--orchestration",
+        help="Execution mode: serial | batch",
+    ),
+    max_in_flight: int = typer.Option(
+        4,
+        "--max-in-flight",
+        min=1,
+        help="Maximum active provider batch jobs when --orchestration=batch.",
+    ),
 ) -> None:
     """Sync a registered universe to local storage over ``[start, end]``."""
     if force_refresh and not budget_ack:
@@ -201,23 +218,80 @@ def sync_universe(
     start_date = parse_date(start)
     end_date = parse_date(end) if end else date.today()
 
+    if verbose:
+        _install_sync_heartbeat()
+
     reg = _registry()
     service = DataService()
     try:
-        report = service.sync(
-            universe_name,
-            start=start_date,
-            end=end_date,
-            provider=provider,
-            timeframe=timeframe,
-            dataset=dataset,
-            force_refresh=force_refresh,
-            registry=reg,
-        )
+        if orchestration == "serial":
+            report = service.sync(
+                universe_name,
+                start=start_date,
+                end=end_date,
+                provider=provider,
+                timeframe=timeframe,
+                dataset=dataset,
+                force_refresh=force_refresh,
+                registry=reg,
+            )
+        elif orchestration == "batch":
+            report = service.sync_batch(
+                universe_name,
+                start=start_date,
+                end=end_date,
+                provider=provider,
+                timeframe=timeframe,
+                dataset=dataset,
+                force_refresh=force_refresh,
+                registry=reg,
+                max_in_flight=max_in_flight,
+            )
+        else:
+            console.print("[red]--orchestration must be one of: serial, batch[/red]")
+            raise typer.Exit(1)
     except UniverseNotFoundError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     typer.echo(json.dumps(report))
+
+
+def _install_sync_heartbeat() -> None:
+    """Attach a stderr handler that prints one short line per
+    structured sync event. Idempotent — re-invocation is a no-op."""
+    import logging
+
+    root_logger = logging.getLogger("liq.data")
+    root_logger.setLevel(logging.INFO)
+    if any(getattr(h, "_liq_data_heartbeat", False) for h in root_logger.handlers):
+        return
+
+    class _HeartbeatHandler(logging.StreamHandler):
+        _liq_data_heartbeat = True
+
+        def emit(self, record: logging.LogRecord) -> None:
+            event = getattr(record, "event", None)
+            if event is None:
+                return
+            symbol = getattr(record, "symbol", "")
+            job_id = getattr(record, "job_id", "")
+            state = getattr(record, "state", "")
+            extras = " ".join(
+                f"{k}={v}"
+                for k, v in (("symbol", symbol), ("job_id", job_id), ("state", state))
+                if v
+            )
+            try:
+                self.stream.write(f"[{event}] {extras}\n".strip() + "\n")
+                self.stream.flush()
+            except Exception:  # noqa: BLE001 — heartbeat must never crash the sync
+                pass
+
+    import sys
+
+    handler = _HeartbeatHandler(sys.stderr)
+    handler.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
 
 
 # ----- helpers --------------------------------------------------------------

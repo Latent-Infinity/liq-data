@@ -10,19 +10,31 @@ from datetime import UTC, datetime, timedelta
 class RateLimiter:
     """Token-bucket-like limiter using sliding window."""
 
-    def __init__(self, requests_per_minute: int | None = None, burst: int | None = None) -> None:
+    def __init__(
+        self,
+        requests_per_minute: int | None = None,
+        burst: int | None = None,
+        min_interval_seconds: float | None = None,
+    ) -> None:
         self.requests_per_minute = requests_per_minute
         self.burst = burst or requests_per_minute
+        self.min_interval_seconds = min_interval_seconds
         self._events: deque[datetime] = deque()
 
     def acquire(self) -> None:
         """Block until within rate limits."""
-        if not self.requests_per_minute:
+        if not self.requests_per_minute and not self.min_interval_seconds:
             return
         now = datetime.now(UTC)
+        if self.min_interval_seconds and self._events:
+            next_allowed = self._events[-1] + timedelta(seconds=self.min_interval_seconds)
+            sleep_for = (next_allowed - now).total_seconds()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+                now = datetime.now(UTC)
         window = timedelta(minutes=1)
         self._evict(now, window)
-        if self.burst and len(self._events) >= self.burst:
+        if self.requests_per_minute and self.burst and len(self._events) >= self.burst:
             sleep_for = (self._events[0] + window - now).total_seconds()
             if sleep_for > 0:
                 time.sleep(sleep_for)

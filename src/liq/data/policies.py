@@ -11,6 +11,7 @@ class ProviderPolicy:
 
     requests_per_minute: int | None = None
     burst: int | None = None
+    min_interval_seconds: float | None = None
     delayed_feed: bool = False
     corporate_actions: str | None = None  # e.g., "adjusted", "unadjusted", "provider-handled"
 
@@ -46,5 +47,12 @@ POLICIES: dict[str, ProviderPolicy] = {
     ),
     "tradestation": ProviderPolicy(
         requests_per_minute=120, burst=120, delayed_feed=False, corporate_actions="provider-handled"
+    ),
+    "databento": ProviderPolicy(
+        requests_per_minute=30,
+        burst=30,
+        min_interval_seconds=2.0,
+        delayed_feed=False,
+        corporate_actions="adjusted",
     ),
 }

@@ -27,6 +27,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from liq.data.exceptions import ProviderNoDataError
 from liq.data.providers.databento import (
     DATABENTO_BATCH_THRESHOLD_DAYS,
     DATABENTO_PRICE_SCALE,
@@ -196,6 +197,24 @@ class TestDatasetRouting:
         provider, _ = _make_provider()
         with pytest.raises(ProviderError):
             provider.fetch_bars("AAPL", date(2025, 1, 2), date(2025, 1, 3), timeframe="3m")
+
+
+class TestNoDataTranslation:
+    def test_422_no_data_error_maps_to_provider_no_data(self) -> None:
+        class _NoDataError(Exception):
+            http_status = 422
+            json_body = {"error": "data_no_data_found_for_request"}
+
+        provider, _ = _make_provider()
+
+        with pytest.raises(ProviderNoDataError, match="No data"):
+            provider._call_with_retry(
+                lambda: (_ for _ in ()).throw(_NoDataError("No data was found")),
+                sync_run_id="run-1",
+                dataset="EQUS.MINI",
+                symbol="FISV",
+                request_kind="batch",
+            )
 
 
 # ----- batch-vs-sync routing -------------------------------------------------
@@ -791,7 +810,10 @@ class _StatefulBatch:
         state = self._details_states.pop(0) if self._details_states else "done"
         return {"id": job_id, "state": state}
 
-    def download(self, *, job_id: str) -> _FakeDBNStore:
+    def download(self, *, job_id: str, **_kwargs) -> _FakeDBNStore:
+        # Real SDK accepts ``output_dir`` and ``keep_zip`` kwargs; we
+        # ignore them in the legacy store-returning fake. The provider
+        # passes ``output_dir`` so the real path can land files on disk.
         self.download_calls.append(job_id)
         if self._download_error is not None:
             raise self._download_error

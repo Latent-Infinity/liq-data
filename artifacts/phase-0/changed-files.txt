@@ -1,0 +1,5 @@
+src/liq/data/calendar.py  (extended: GapClass type + closed_hours_between + classify_gap)
+tests/test_calendar_gap_helpers.py  (new)
+docs/calendar.md  (new)
+AGENT_STATE.md  (new)
+artifacts/phase-0/  (new)

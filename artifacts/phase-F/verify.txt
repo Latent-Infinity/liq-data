@@ -1,0 +1,26 @@
+=== liq-data verify (README has no Development section; use workspace canon: ruff format check + ruff check + ty check + pytest) ===
+--- ruff format --check src tests ---
+90 files already formatted
+
+--- ruff check src tests ---
+All checks passed!
+
+--- ty check src ---
+All checks passed!
+
+--- pytest -q ---
+src/liq/data/providers/polygon.py             94      6     34      5    91%   219, 221, 223, 227-228, 279->282, 304
+src/liq/data/providers/tradestation.py       174     28     62     13    81%   118, 152, 164-173, 185-206, 221, 240-241, 253->exit, 255->exit, 263, 302-303, 306, 312, 337, 340, 406->452, 427, 447, 500-502, 505
+src/liq/data/qa.py                            84     10     28     10    82%   77, 81, 85, 93, 105, 111, 120-121, 125, 129
+src/liq/data/rate_limiter.py                  32      1     12      3    91%   32->35, 39->41, 47
+src/liq/data/retry.py                          9      0      0      0   100%
+src/liq/data/service.py                      443     48    148     30    85%   247->272, 251, 253, 254->272, 270->272, 275->288, 277, 285->287, 313-325, 410->412, 416->419, 431, 433->436, 449, 451->454, 460, 467, 486, 500-532, 559->562, 615->619, 699, 817, 1072, 1116, 1137-1138, 1189, 1252->1264, 1279-1291, 1297, 1318->1322, 1363->1300, 1406-1407
+src/liq/data/settings.py                     154     11     58     10    90%   58, 198, 259, 302, 343, 372, 405, 440, 448, 490-491, 584->574
+src/liq/data/sync_events.py                   30      0      0      0   100%
+src/liq/data/universes.py                    171      2     54      2    98%   85->94, 209, 261
+src/liq/data/updater.py                      148      1     42      3    98%   157->161, 164->167, 436
+--------------------------------------------------------------------------------------
+TOTAL                                       3853    264   1140    164    91%
+Required test coverage of 90% reached. Total coverage: 90.79%
+=========================== short test summary info ============================
+SKIPPED [1] tests/providers/test_databento.py:1283: set RUN_DATABENTO=1 (and DATABENTO_API_KEY) to run the real-API smoke

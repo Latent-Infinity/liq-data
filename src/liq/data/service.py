@@ -760,6 +760,104 @@ class DataService:
             named_universes=named_universes,
         ).resolve(definition, as_of=as_of)
 
+    def estimate_databento_cost(
+        self,
+        universe: Any,
+        *,
+        start: date,
+        end: date,
+        timeframe: str,
+        dataset: str,
+        registry: Any | None = None,
+    ) -> dict[str, Any]:
+        """No-spend cost estimate for a Databento ingestion.
+
+        Wraps Databento's non-billable metadata endpoints
+        (``metadata.get_cost`` and ``metadata.get_billable_size``) so a
+        caller can confirm an operator-authorised cost bound *before*
+        invoking the billable :meth:`sync`. Currently only
+        ``timeframe="1m"`` is supported (derives ``schema="ohlcv-1m"``).
+
+        Returns a dict with keys:
+            billable_bytes, estimated_cost_usd, dataset, schema,
+            symbols, start, end, provider_request_id
+
+        Raises ``ValueError`` on bad timeframe, empty universe, inverted
+        date range, or missing ``DATABENTO_API_KEY``.
+        """
+        if timeframe != "1m":
+            raise ValueError(
+                f"estimate_databento_cost only supports timeframe='1m' "
+                f"(got {timeframe!r}); higher timeframes are not yet wired."
+            )
+        if end < start:
+            raise ValueError(f"end ({end}) must be on or after start ({start})")
+        if not self._settings.databento_api_key:
+            raise ValueError(
+                "DATABENTO_API_KEY not configured. Set it in .env or pass "
+                "settings with `databento_api_key=...`."
+            )
+
+        resolved = self.resolve_universe(universe, as_of=end, registry=registry)
+        symbols = list(resolved.symbols)
+        if not symbols:
+            raise ValueError(
+                "estimate_databento_cost requires a non-empty symbols list "
+                "after universe resolution"
+            )
+
+        schema = "ohlcv-1m"
+
+        # Lazy import keeps the databento dep cost off the hot path.
+        import databento  # noqa: PLC0415
+
+        client = databento.Historical(key=self._settings.databento_api_key)
+        cost_usd = float(
+            client.metadata.get_cost(
+                dataset=dataset,
+                symbols=symbols,
+                schema=schema,
+                start=start,
+                end=end,
+            )
+        )
+        billable_bytes = int(
+            client.metadata.get_billable_size(
+                dataset=dataset,
+                symbols=symbols,
+                schema=schema,
+                start=start,
+                end=end,
+            )
+        )
+
+        request_id = uuid.uuid4().hex
+        logger.info(
+            "databento cost estimate",
+            extra={
+                "provider": "databento",
+                "dataset": dataset,
+                "schema": schema,
+                "symbols": symbols,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "estimated_cost_usd": cost_usd,
+                "billable_bytes": billable_bytes,
+                "provider_request_id": request_id,
+            },
+        )
+
+        return {
+            "billable_bytes": billable_bytes,
+            "estimated_cost_usd": cost_usd,
+            "dataset": dataset,
+            "schema": schema,
+            "symbols": symbols,
+            "start": start,
+            "end": end,
+            "provider_request_id": request_id,
+        }
+
     def sync(
         self,
         universe: Any,

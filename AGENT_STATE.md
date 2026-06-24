@@ -32,3 +32,9 @@ State tracked per implementation plan that touches this repo.
 | F+1 — Final verification | done | green | _(this commit)_ | `AGENT_SUMMARY.md` |
 
 Open follow-ups: _None_ for `liq-scan-plan`. Blocked entries: _None._
+
+## Plan: `breakout-following-strategy-impl-plan` (v0.2.6)
+
+| Work package | Capability | Status | Evidence |
+| --- | --- | --- | --- |
+| B0 | Required upstream enhancement (impl plan §1.5.1) landed: `DataService.estimate_databento_cost(universe, *, start, end, timeframe, dataset, registry=None) -> dict` — wraps Databento's non-billable `metadata.get_cost(...) -> float` USD and `metadata.get_billable_size(...) -> int` bytes endpoints (verified against `databento` 0.79.0 surface, constructor signature `Historical(key=...)` per `src/liq/data/providers/databento.py:1170`). Derives `schema="ohlcv-1m"` from `timeframe="1m"`; refuses any other timeframe. Refuses missing `DATABENTO_API_KEY`, empty universes, inverted date ranges. Returns dict with keys `{billable_bytes, estimated_cost_usd, dataset, schema, symbols, start, end, provider_request_id}` without triggering any billable download. Universe-registration row for `ai-chip-liquid-30-riskvar` already present at `data/financial_data/reference/universes/ai-chip-liquid-30-riskvar.yaml` version 1 (30 symbols); no additional registration needed. | ready-for-review | `src/liq/data/service.py:763` (`estimate_databento_cost`); `tests/test_estimate_databento_cost.py` (20 new tests, all green). Workspace-standard verify (`uv run pytest && uv run ruff check src tests && uv run ruff format --check src tests && uv run ty check src`) green: 735 passed + 1 pre-existing skip. |

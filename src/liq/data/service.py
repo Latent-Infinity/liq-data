@@ -31,7 +31,9 @@ Example:
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -717,9 +719,9 @@ class DataService:
 
         Accepts three input shapes for caller convenience:
 
-        * :class:`UniverseDefinition` — used verbatim.
-        * ``list[str]`` of symbols — wrapped in an explicit definition.
-        * ``str`` name — looked up in ``registry``; raises ``ValueError``
+        * :class:`UniverseDefinition`: used verbatim.
+        * ``list[str]`` of symbols: wrapped in an explicit definition.
+        * ``str`` name: looked up in ``registry``; raises ``ValueError``
           if no registry is supplied.
 
         Returns a :class:`ResolvedUniverse` whose ``symbols`` are
@@ -871,13 +873,14 @@ class DataService:
         registry: Any | None = None,
         as_of: date | None = None,
         lock_timeout: float = 60.0,
+        max_workers: int = 1,
     ) -> dict[str, Any]:
         """Sync a universe to local storage.
 
         Resolves the universe (a :class:`UniverseDefinition` or a name to
         look up in ``registry``), computes per-symbol fetch gaps from the
         coverage manifest, fetches each gap via the provider, and
-        records the new ranges transactionally per symbol — so a fetch
+        records the new ranges transactionally per symbol, so a fetch
         that raises mid-flight rolls back the manifest claim for that
         symbol but leaves earlier-symbol claims persisted (resumable).
 
@@ -886,15 +889,24 @@ class DataService:
         target; ``lock_timeout`` controls how long to wait before
         raising :class:`SyncLockedError`.
 
+        ``max_workers`` (default ``1``: sequential, byte-identical to
+        the pre-enhancement behaviour) caps the size of the
+        :class:`concurrent.futures.ThreadPoolExecutor` used for the
+        per-symbol loop. Values > 1 unlock per-symbol concurrency
+        within the universe-level file lock; per-symbol transactional
+        manifest claims are preserved unchanged (the lock around each
+        symbol's manifest transaction is the inherited ``txn`` context
+        manager).
+
         Returns a small report dict:
 
-        * ``symbols`` — count of resolved symbols
-        * ``api_calls`` — number of provider fetches actually made
+        * ``symbols``: count of resolved symbols
+        * ``api_calls``: number of provider fetches actually made
           (zero on a fully-cached re-run)
-        * ``manifest_gaps`` — total uncovered ranges seen at planning time
-        * ``rows_fetched`` — total rows pulled across all symbols
-        * ``pit`` — propagated from the resolved universe
-        * ``sync_run_id`` — UUID correlating every emitted log event
+        * ``manifest_gaps``: total uncovered ranges seen at planning time
+        * ``rows_fetched``: total rows pulled across all symbols
+        * ``pit``: propagated from the resolved universe
+        * ``sync_run_id``: UUID correlating every emitted log event
 
         ``force_refresh=True`` skips the gap calc and re-fetches every
         symbol over the full requested window.
@@ -997,7 +1009,22 @@ class DataService:
             request_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
             request_end = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
 
-            for symbol in resolved.symbols:
+            if max_workers <= 0:
+                raise ValueError(f"max_workers must be >= 1; got {max_workers}")
+
+            counters_lock = threading.Lock()
+            rate_limiter_lock = threading.Lock()
+
+            def _sync_one_symbol(symbol: str) -> None:
+                """Per-symbol fetch + manifest-transaction body.
+
+                Identical semantics to the sequential implementation; lifted
+                out so the outer loop can dispatch it either directly
+                (max_workers=1, byte-identical to the prior code path) or via
+                a ThreadPoolExecutor (max_workers > 1).
+                """
+                nonlocal api_calls, rows_fetched, manifest_gaps_total
+
                 manifest = CoverageManifest.load(
                     root=self._data_root,
                     provider=provider,
@@ -1010,9 +1037,10 @@ class DataService:
                     if force_refresh
                     else manifest.gaps(start=request_start, end=request_end)
                 )
-                manifest_gaps_total += len(gaps)
+                with counters_lock:
+                    manifest_gaps_total += len(gaps)
                 if not gaps:
-                    continue
+                    return
 
                 logger.info(
                     "manifest gaps detected",
@@ -1037,15 +1065,17 @@ class DataService:
                 try:
                     with manifest.transaction() as txn:
                         for gap_start, gap_end in gaps:
-                            rate_limiter.acquire()
+                            with rate_limiter_lock:
+                                rate_limiter.acquire()
                             df = prov.fetch_bars(
                                 symbol,
                                 gap_start.date(),
                                 gap_end.date(),
                                 timeframe=timeframe,
                             )
-                            api_calls += 1
-                            rows_fetched += df.height
+                            with counters_lock:
+                                api_calls += 1
+                                rows_fetched += df.height
                             symbol_rows += df.height
                             if not df.is_empty():
                                 storage_key = self._storage_key(provider, symbol, timeframe)
@@ -1101,6 +1131,28 @@ class DataService:
                         "gaps_count": len(gaps),
                     },
                 )
+
+            if max_workers == 1:
+                # Sequential dispatch: byte-identical to the prior code path
+                # (no thread-pool overhead, no spurious ordering changes).
+                for symbol in resolved.symbols:
+                    _sync_one_symbol(symbol)
+            else:
+                # Parallel dispatch: bounded to ``max_workers`` concurrent
+                # in-flight per-symbol tasks. The per-symbol manifest
+                # transaction is the inherited atomic claim. The first
+                # exception aborts the sync (waiting on in-flight tasks to
+                # drain naturally via ThreadPoolExecutor shutdown).
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=max_workers,
+                    thread_name_prefix="liq-data-sync",
+                ) as pool:
+                    futures = [pool.submit(_sync_one_symbol, symbol) for symbol in resolved.symbols]
+                    for future in concurrent.futures.as_completed(futures):
+                        # Re-raise the first exception we observe; outstanding
+                        # futures continue running to their own completion
+                        # under the executor's shutdown semantics.
+                        future.result()
 
             logger.info(
                 "sync completed",

@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from liq.data.providers.fred import FREDProvider
     from liq.data.providers.oanda import OandaProvider
     from liq.data.providers.polygon import PolygonProvider
+    from liq.data.providers.sec_edgar import SECEdgarProvider
     from liq.data.providers.tradestation import TradeStationProvider
 
 
@@ -88,6 +89,12 @@ class LiqDataSettings(BaseSettings):
 
     # FRED settings (Federal Reserve Economic Data)
     fred_api_key: str | None = Field(default=None, description="FRED API key")
+
+    # SEC EDGAR settings (free; fair-use policy requires a contact User-Agent)
+    sec_edgar_user_agent: str | None = Field(
+        default=None,
+        description="Contact User-Agent for SEC EDGAR requests, e.g. 'name email@example.com'",
+    )
 
     # OANDA settings
     oanda_api_key: str | None = Field(default=None, description="OANDA API key")
@@ -411,6 +418,33 @@ def create_fred_provider(settings: LiqDataSettings | None = None) -> "FREDProvid
         )
 
     return FREDProvider(api_key=settings.fred_api_key)
+
+
+def create_sec_edgar_provider(settings: LiqDataSettings | None = None) -> "SECEdgarProvider":
+    """Create a SEC EDGAR provider from settings.
+
+    Args:
+        settings: Optional settings instance (uses get_settings() if not provided)
+
+    Returns:
+        Configured SECEdgarProvider instance
+
+    Raises:
+        ValueError: If SEC_EDGAR_USER_AGENT is not configured.
+    """
+    from liq.data.providers.sec_edgar import SECEdgarProvider
+
+    if settings is None:
+        settings = get_settings()
+
+    if not settings.sec_edgar_user_agent:
+        raise ValueError(
+            "SEC_EDGAR_USER_AGENT not configured. SEC fair-use policy requires a "
+            "contact User-Agent, e.g. 'name email@example.com'. Set it in .env or "
+            "as an environment variable."
+        )
+
+    return SECEdgarProvider(user_agent=settings.sec_edgar_user_agent)
 
 
 def create_databento_provider(

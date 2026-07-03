@@ -12,9 +12,10 @@ Four kinds are supported. The kind dictates the spec shape:
   volume, security type, exchange). PIT iff the reference data is PIT,
   which it is here because ``ReferenceData`` is keyed by ``as_of``.
 * ``composite`` — index membership (e.g. ``SP500``) looked up via a
-  :class:`ConstituentSource`. PIT iff the source claims to be PIT;
-  ships only with an :class:`InMemoryStubSource` (current-membership-
-  only, ``pit=False``) until a real PIT vendor is wired in.
+  :class:`ConstituentSource`. PIT iff the source claims to be PIT. The
+  default :class:`InMemoryStubSource` is current-membership-only
+  (``pit=False``); :class:`SnapshotConstituentSource` resolves historical
+  full-composition snapshots with floor semantics (``pit=True``).
 * ``set_op`` — ``union`` / ``intersect`` / ``exclude`` over other
   universe definitions. PIT iff every input is PIT.
 
@@ -25,6 +26,7 @@ hand-edited.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Sequence
 from datetime import date
 from enum import StrEnum
@@ -157,6 +159,44 @@ class InMemoryStubSource:
 
     def members(self, *, id: str, as_of: date) -> Sequence[str]:  # noqa: ARG002 — as_of unused for current-only
         return list(self._mappings.get(id, ()))
+
+
+class SnapshotConstituentSource:
+    """Point-in-time constituent source backed by full-composition snapshots.
+
+    Each snapshot row is the complete index membership on its date;
+    ``members`` resolves with floor semantics (the most recent snapshot at
+    or before ``as_of``). ``pit=True`` because historical membership is
+    reproduced as-of any covered date — asking for a date before the first
+    snapshot is an error, never a silent current-membership fallback.
+    """
+
+    pit: bool = True
+
+    def __init__(self, constituent_id: str, snapshots: pl.DataFrame) -> None:
+        self._id = constituent_id
+        frame = snapshots.sort("date")
+        self._dates: list[date] = frame["date"].to_list()
+        self._tickers: list[list[str]] = [
+            sorted({str(t).upper() for t in row}) for row in frame["tickers"].to_list()
+        ]
+
+    @classmethod
+    def from_parquet(cls, constituent_id: str, path: Path | str) -> SnapshotConstituentSource:
+        """Load snapshots (``date``, ``tickers`` list column) from parquet."""
+        return cls(constituent_id, pl.read_parquet(path))
+
+    def members(self, *, id: str, as_of: date) -> Sequence[str]:
+        if id != self._id:
+            raise UniverseResolutionError(
+                f"unknown constituent id {id!r}; this source serves {self._id!r}"
+            )
+        position = bisect_right(self._dates, as_of) - 1
+        if position < 0:
+            raise UniverseResolutionError(
+                f"as_of {as_of} is before first snapshot {self._dates[0]}"
+            )
+        return list(self._tickers[position])
 
 
 @runtime_checkable
@@ -396,6 +436,7 @@ __all__ = [
     "InMemoryStubSource",
     "ReferenceData",
     "ResolvedUniverse",
+    "SnapshotConstituentSource",
     "UniverseConflictError",
     "UniverseDefinition",
     "UniverseError",

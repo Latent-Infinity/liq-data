@@ -10,13 +10,22 @@ from liq.data.exceptions import (
     AuthenticationError,
     ConfigurationError,
     DataError,
+    LockboxViolationError,
     ProviderError,
     RateLimitError,
     ValidationError,
+    ValidationReuseError,
 )
 from liq.data.fetcher import DataFetcher
 from liq.data.forex import detect_gap_policy, normalize_hourly
 from liq.data.instruments import InstrumentSync
+from liq.data.lockbox import (
+    INTRADAY_CAMPAIGN_LEDGER_V1,
+    FoldWindows,
+    LockboxGuard,
+    LockboxLedger,
+    resolve_dataset,
+)
 from liq.data.protocols import AsyncMarketDataProvider, MarketDataProvider
 from liq.data.providers import (
     BaseProvider,
@@ -63,6 +72,12 @@ __all__ = [
     "detect_gap_policy",
     "retry",
     "async_retry",
+    # Lockbox guard
+    "LockboxGuard",
+    "LockboxLedger",
+    "FoldWindows",
+    "INTRADAY_CAMPAIGN_LEDGER_V1",
+    "resolve_dataset",
     # Exceptions
     "DataError",
     "ProviderError",
@@ -70,4 +85,6 @@ __all__ = [
     "AuthenticationError",
     "ValidationError",
     "ConfigurationError",
+    "LockboxViolationError",
+    "ValidationReuseError",
 ]

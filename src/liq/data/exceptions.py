@@ -7,6 +7,18 @@ class DataError(Exception):
     pass
 
 
+class LockboxViolationError(DataError):
+    """A research read violated the lockbox ledger fold boundaries."""
+
+    pass
+
+
+class ValidationReuseError(LockboxViolationError):
+    """An arm attempted a second validation-period use of a dataset."""
+
+    pass
+
+
 class ProviderError(DataError):
     """Error from a data provider."""
 

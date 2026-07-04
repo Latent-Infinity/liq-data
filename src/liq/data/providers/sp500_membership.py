@@ -102,6 +102,57 @@ class SP500MembershipProvider:
         wikitext = response.json()["parse"]["wikitext"]
         return parse_wikipedia_changes(wikitext)
 
+    def fetch_wikipedia_sectors(self) -> dict[str, str]:
+        """Current ``symbol -> GICS sector`` map from the constituents table."""
+        response = self._get_client().get(
+            WIKIPEDIA_API_URL,
+            params={
+                "action": "parse",
+                "page": _WIKIPEDIA_PAGE,
+                "prop": "wikitext",
+                "format": "json",
+                "formatversion": "2",
+            },
+        )
+        response.raise_for_status()
+        return parse_wikipedia_sectors(response.json()["parse"]["wikitext"])
+
+
+_SYMBOL_TEMPLATE = re.compile(r"\{\{(?:Nyse|Nasdaq|Cboe)[Ss]ymbol\|([A-Z][A-Z0-9.\-]{0,6})\}\}")
+
+
+def parse_wikipedia_sectors(wikitext: str) -> dict[str, str]:
+    """``symbol -> GICS sector`` from the current-constituents table.
+
+    Current-membership sectors only; historical sector reassignments are not
+    reconstructed (an accepted screen-grade caveat alongside entity-PIT).
+    """
+    _, found, tail = wikitext.partition('id="constituents"')
+    if not found:
+        raise ValueError('wikitext has no constituents table (id="constituents")')
+    table = tail.partition("|}")[0]
+    sectors: dict[str, str] = {}
+    for block in table.split("\n|-"):
+        symbol_match = _SYMBOL_TEMPLATE.search(block)
+        if symbol_match is None:
+            continue
+        cells: list[str] = []
+        symbol_cell_index: int | None = None
+        for line in block.splitlines():
+            line = line.strip()
+            if not line.startswith("|") or line.startswith("|}"):
+                continue
+            for cell in line.lstrip("|").split("||"):
+                if _SYMBOL_TEMPLATE.search(cell) is not None:
+                    symbol_cell_index = len(cells)
+                cells.append(_WIKI_LINK.sub(r"\1", cell).strip())
+        if symbol_cell_index is None:
+            continue
+        sector_index = symbol_cell_index + 2  # symbol, security, GICS sector
+        if sector_index < len(cells) and cells[sector_index]:
+            sectors[symbol_match.group(1)] = cells[sector_index]
+    return sectors
+
 
 def parse_wikipedia_changes(wikitext: str) -> pl.DataFrame:
     """Parse the ``id="changes"`` table into ``date / symbol / action`` rows.

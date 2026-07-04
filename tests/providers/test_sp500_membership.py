@@ -24,6 +24,7 @@ from liq.data.providers.sp500_membership import (
     build_membership_deltas,
     cross_check_deltas,
     parse_wikipedia_changes,
+    parse_wikipedia_sectors,
 )
 
 _UA = "liq-research/0.1 (test@example.com)"
@@ -218,3 +219,44 @@ class TestCrossCheck:
             "confirmed",
             "not-in-wikipedia-window",
         ]
+
+
+_CONSTITUENTS_EXCERPT = """{| class="wikitable sortable sticky-header" id="constituents"
+|-
+![[Ticker symbol|Symbol]]
+! Security !! [[Global Industry Classification Standard|GICS]] Sector !! GICS Sub-Industry !! Headquarters Location !! Date added !! [[Central Index Key|CIK]] !! Founded
+|-
+|{{NyseSymbol|MMM}}
+|[[3M]]|| Industrials || Industrial Conglomerates || [[Saint Paul, Minnesota]] || 1957-03-04 || 0000066740 || 1902
+|-
+|{{NyseSymbol|ABT}}
+|[[Abbott Laboratories]]|| Health Care || Health Care Equipment || [[North Chicago, Illinois]] || 1957-03-04 || 0000001800 || 1888
+|-
+|{{NasdaqSymbol|ACN}}
+|[[Accenture]]|| Information Technology || IT Consulting & Other Services || [[Dublin]], Ireland || 2011-07-06 || 0001467373 || 1989
+|}"""
+
+
+class TestSectorParser:
+    def test_parses_symbol_to_gics_sector(self) -> None:
+        sectors = parse_wikipedia_sectors(_CONSTITUENTS_EXCERPT)
+        assert sectors["MMM"] == "Industrials"
+        assert sectors["ABT"] == "Health Care"
+        assert sectors["ACN"] == "Information Technology"
+        assert len(sectors) == 3
+
+    def test_parses_single_line_constituent_row(self) -> None:
+        excerpt = """{| class="wikitable sortable sticky-header" id="constituents"
+|-
+! Symbol !! Security !! GICS Sector
+|-
+|{{NyseSymbol|MMM}} || [[3M]] || Industrials
+|}"""
+        assert parse_wikipedia_sectors(excerpt)["MMM"] == "Industrials"
+
+    @respx.mock
+    def test_fetch_wikipedia_sectors(self) -> None:
+        payload = {"parse": {"wikitext": _CONSTITUENTS_EXCERPT}}
+        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=payload))
+        provider = SP500MembershipProvider(user_agent=_UA)
+        assert provider.fetch_wikipedia_sectors()["MMM"] == "Industrials"

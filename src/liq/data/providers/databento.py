@@ -760,12 +760,15 @@ class DatabentoProvider(BaseProvider):
         timeframe: str = "1d",
         *,
         validate_aggregate: bool = False,
+        dataset: str | None = None,
     ) -> pl.DataFrame:
         if not symbol:
             raise ValueError("symbol must be non-empty")
         if end < start:
             raise ValueError(f"end ({end}) must be >= start ({start})")
-        dataset = self._resolve_dataset(timeframe)
+        # ``dataset`` overrides ``DATASET_ROUTING`` for securities that only
+        # exist on a venue dataset (e.g. delisted names on XNAS.ITCH).
+        dataset = dataset if dataset is not None else self._resolve_dataset(timeframe)
         schema = self._resolve_schema(timeframe)
 
         span_days = (end - start).days + 1

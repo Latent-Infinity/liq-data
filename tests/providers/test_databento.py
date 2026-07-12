@@ -191,6 +191,19 @@ class TestDatasetRouting:
         provider.fetch_bars("AAPL", date(2025, 1, 2), date(2025, 1, 3), timeframe="1m")
         assert client.timeseries.calls[0]["dataset"] == "EQUS.MINI"
 
+    def test_fetch_bars_dataset_override_bypasses_routing(self) -> None:
+        # Delisted names live only on venue datasets (e.g. XNAS.ITCH), not the
+        # routed EQUS summary dataset; the override reaches them.
+        provider, client = _make_provider()
+        provider.fetch_bars(
+            "DISCA",
+            date(2020, 6, 1),
+            date(2020, 6, 3),
+            timeframe="1d",
+            dataset="XNAS.ITCH",
+        )
+        assert client.timeseries.calls[0]["dataset"] == "XNAS.ITCH"
+
     def test_unsupported_timeframe_raises(self) -> None:
         from liq.data.exceptions import ProviderError
 

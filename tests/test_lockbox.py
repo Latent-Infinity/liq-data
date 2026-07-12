@@ -9,6 +9,7 @@ import pytest
 
 from liq.data.exceptions import LockboxViolationError, ValidationReuseError
 from liq.data.lockbox import (
+    FCE_LOCKBOX_LEDGER_V1,
     INTRADAY_CAMPAIGN_LEDGER_V1,
     LockboxGuard,
     resolve_dataset,
@@ -38,12 +39,73 @@ class TestLedger:
             "oanda_fx",
             "binance_spot",
             "binance_perp",
+            "coinbase_spot",
             "databento_extended_hours",
         }
         assert set(INTRADAY_CAMPAIGN_LEDGER_V1.datasets) == expected
 
+    def test_coinbase_spot_folds(self) -> None:
+        windows = INTRADAY_CAMPAIGN_LEDGER_V1.datasets["coinbase_spot"]
+        assert windows.discovery == (date(2020, 1, 1), date(2024, 12, 31))
+        assert windows.validation == (date(2025, 1, 1), date(2025, 12, 31))
+        assert windows.lockbox_start == date(2026, 1, 1)
+
     def test_ledger_has_version(self) -> None:
         assert INTRADAY_CAMPAIGN_LEDGER_V1.version
+
+
+class TestFceLedger:
+    """The FCE ledger freezes the approved 2020-2026 source envelope."""
+
+    def test_fce_ledger_version_and_dataset_boundaries(self) -> None:
+        assert FCE_LOCKBOX_LEDGER_V1.version == "fce_v1_2020_2026"
+        expected = {
+            "spy_qqq_ladder_tradestation",
+            "tradestation_cohort_1m",
+            "oanda_fx",
+            "coinbase_spot",
+            "databento_extended_hours",
+            "fred_macro",
+        }
+        assert set(FCE_LOCKBOX_LEDGER_V1.datasets) == expected
+
+        for windows in FCE_LOCKBOX_LEDGER_V1.datasets.values():
+            assert windows.discovery == (date(2020, 1, 1), date(2024, 12, 31))
+            assert windows.validation == (date(2025, 1, 1), date(2025, 12, 31))
+            assert windows.lockbox_start == date(2026, 1, 1)
+
+    def test_fce_ledger_blocks_ordinary_lockbox_reads(self, tmp_path: Path) -> None:
+        guard = LockboxGuard(
+            usage_log_path=tmp_path / "lockbox_usage_log.jsonl",
+            ledger=FCE_LOCKBOX_LEDGER_V1,
+        )
+
+        with pytest.raises(LockboxViolationError, match="program lockbox"):
+            guard.assert_period_allowed(
+                "fred_macro",
+                date(2026, 1, 1),
+                date(2026, 12, 31),
+                purpose="validation",
+                arm_id="fce_macro_probe",
+            )
+
+    def test_fce_ledger_allows_human_only_final_review(self, tmp_path: Path) -> None:
+        guard = LockboxGuard(
+            usage_log_path=tmp_path / "lockbox_usage_log.jsonl",
+            ledger=FCE_LOCKBOX_LEDGER_V1,
+        )
+        guard.assert_period_allowed(
+            "oanda_fx",
+            date(2026, 1, 1),
+            date(2026, 3, 31),
+            purpose="validation",
+            arm_id="fce_portfolio_review",
+            final_portfolio_review=True,
+        )
+
+        entry = read_log(guard)[0]
+        assert entry["ledger_version"] == "fce_v1_2020_2026"
+        assert entry["final_portfolio_review"] is True
 
 
 class TestDiscovery:
@@ -71,7 +133,7 @@ class TestDiscovery:
             guard.assert_period_allowed(
                 "spy_qqq_ladder_tradestation",
                 date(2015, 1, 1),
-                date(2023, 6, 30),
+                date(2025, 6, 30),
                 purpose="discovery",
                 arm_id="idea_01",
             )
@@ -91,7 +153,7 @@ class TestDiscovery:
             guard.assert_period_allowed(
                 "spy_qqq_ladder_tradestation",
                 date(2015, 1, 1),
-                date(2023, 6, 30),
+                date(2025, 6, 30),
                 purpose="discovery",
                 arm_id="idea_01",
             )
@@ -103,8 +165,8 @@ class TestLockboxPeriod:
         with pytest.raises(LockboxViolationError):
             guard.assert_period_allowed(
                 "spy_qqq_ladder_tradestation",
-                date(2025, 1, 1),
-                date(2025, 6, 30),
+                date(2026, 1, 1),
+                date(2026, 6, 30),
                 purpose="discovery",
                 arm_id="idea_01",
             )
@@ -122,8 +184,8 @@ class TestLockboxPeriod:
     def test_final_portfolio_review_flag_allows_and_is_logged(self, guard: LockboxGuard) -> None:
         guard.assert_period_allowed(
             "spy_qqq_ladder_tradestation",
-            date(2025, 1, 1),
-            date(2025, 12, 31),
+            date(2026, 1, 1),
+            date(2026, 12, 31),
             purpose="validation",
             arm_id="portfolio_review",
             final_portfolio_review=True,
@@ -144,14 +206,12 @@ class TestLockboxPeriod:
                 final_portfolio_review=True,
             )
 
-    def test_final_portfolio_review_requires_lockbox_only_window(
-        self, guard: LockboxGuard
-    ) -> None:
+    def test_final_portfolio_review_requires_lockbox_only_window(self, guard: LockboxGuard) -> None:
         with pytest.raises(LockboxViolationError, match="bounded"):
             guard.assert_period_allowed(
                 "spy_qqq_ladder_tradestation",
-                date(2024, 12, 1),
-                date(2025, 1, 31),
+                date(2025, 12, 1),
+                date(2026, 1, 31),
                 purpose="validation",
                 arm_id="portfolio_review",
                 final_portfolio_review=True,
@@ -197,8 +257,8 @@ class TestValidation:
     def test_validation_within_window_allowed(self, guard: LockboxGuard) -> None:
         guard.assert_period_allowed(
             "spy_qqq_ladder_tradestation",
-            date(2023, 1, 1),
-            date(2024, 12, 31),
+            date(2025, 1, 1),
+            date(2025, 12, 31),
             purpose="validation",
             arm_id="idea_01",
         )
@@ -220,8 +280,8 @@ class TestValidation:
         first = LockboxGuard(usage_log_path=log)
         first.assert_period_allowed(
             "spy_qqq_ladder_tradestation",
-            date(2023, 1, 1),
-            date(2024, 12, 31),
+            date(2025, 1, 1),
+            date(2025, 12, 31),
             purpose="validation",
             arm_id="idea_01",
         )
@@ -229,8 +289,8 @@ class TestValidation:
         with pytest.raises(ValidationReuseError):
             second.assert_period_allowed(
                 "spy_qqq_ladder_tradestation",
-                date(2023, 1, 1),
-                date(2024, 12, 31),
+                date(2025, 1, 1),
+                date(2025, 12, 31),
                 purpose="validation",
                 arm_id="idea_01",
             )
@@ -241,7 +301,7 @@ class TestValidation:
         for _ in range(3):
             guard.assert_period_allowed(
                 "oanda_fx",
-                date(2024, 1, 1),
+                date(2025, 1, 1),
                 date(2025, 12, 31),
                 purpose="validation",
                 arm_id="idea_05a",
@@ -253,16 +313,16 @@ class TestValidation:
         first = LockboxGuard(usage_log_path=log)
         first.assert_period_allowed(
             "spy_qqq_ladder_tradestation",
-            date(2023, 1, 1),
-            date(2024, 12, 31),
+            date(2025, 1, 1),
+            date(2025, 12, 31),
             purpose="validation",
             arm_id="idea_01",
         )
         second = LockboxGuard(usage_log_path=log)
         second.assert_period_allowed(
             "spy_qqq_ladder_tradestation",
-            date(2023, 1, 1),
-            date(2024, 12, 31),
+            date(2025, 1, 1),
+            date(2025, 12, 31),
             purpose="validation",
             arm_id="idea_07",
         )
@@ -391,6 +451,8 @@ class TestResolveDataset:
             ("tradestation", "AAPL", "tradestation_cohort_1m"),
             ("oanda", "EUR_USD", "oanda_fx"),
             ("binance", "BTC_USDT", "binance_spot"),
+            ("coinbase", "BTC-USD", "coinbase_spot"),
+            ("coinbase", "ETH-USD", "coinbase_spot"),
             ("databento", "AAPL", "databento_extended_hours"),
             ("fred", "DGS10", None),
             ("sec_edgar", "8K", None),
@@ -490,3 +552,34 @@ class TestDataServiceIntegration:
             arm_id="idea_99",
         )
         assert isinstance(df, pl.DataFrame)
+
+    def test_load_can_use_fce_ledger(self, tmp_path: Path) -> None:
+        self._write_bars(tmp_path, "oanda", "EUR_USD", datetime(2025, 6, 1, tzinfo=UTC))
+        ds = DataService(data_root=tmp_path, lockbox_ledger=FCE_LOCKBOX_LEDGER_V1)
+        ds.load(
+            "oanda",
+            "EUR_USD",
+            "1m",
+            start=date(2025, 1, 1),
+            end=date(2025, 12, 31),
+            purpose="validation",
+            arm_id="fce_timestamp_contract",
+        )
+
+        entry = json.loads((tmp_path / "lockbox_usage_log.jsonl").read_text().splitlines()[0])
+        assert entry["ledger_version"] == "fce_v1_2020_2026"
+
+    def test_fce_ledger_load_blocks_ordinary_2026_reads(self, tmp_path: Path) -> None:
+        self._write_bars(tmp_path, "oanda", "EUR_USD", datetime(2026, 2, 1, tzinfo=UTC))
+        ds = DataService(data_root=tmp_path, lockbox_ledger=FCE_LOCKBOX_LEDGER_V1)
+
+        with pytest.raises(LockboxViolationError, match="program lockbox"):
+            ds.load(
+                "oanda",
+                "EUR_USD",
+                "1m",
+                start=date(2026, 1, 1),
+                end=date(2026, 12, 31),
+                purpose="validation",
+                arm_id="fce_timestamp_contract",
+            )

@@ -12,6 +12,7 @@ from liq.data.providers.fred import FREDProvider
 from liq.data.providers.oanda import OandaProvider
 from liq.data.providers.polygon import PolygonProvider
 from liq.data.providers.sec_edgar import SECEdgarProvider
+from liq.data.providers.sp500_membership import SP500MembershipProvider
 from liq.data.providers.tradestation import TradeStationProvider
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "OandaProvider",
     "PolygonProvider",
     "SECEdgarProvider",
+    "SP500MembershipProvider",
     "TradeStationProvider",
     # Data types
     "PRICE_DTYPE",

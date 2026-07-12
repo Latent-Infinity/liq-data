@@ -33,6 +33,27 @@ df = ds.load("oanda", "EUR_USD", "1m")
 df = ds.backfill("oanda", "EUR_USD", start, end, timeframe="1m")
 ```
 
+### Research lockbox guard
+
+Research reads must declare a `purpose` and `arm_id`; `DataService.load` then
+enforces the campaign lockbox ledger (`liq.data.lockbox`) before touching any
+data and appends every permitted read to `<data_root>/lockbox_usage_log.jsonl`:
+
+```python
+df = ds.load(
+    "oanda", "EUR_USD", "1m",
+    start=date(2020, 1, 1), end=date(2023, 12, 31),
+    purpose="discovery", arm_id="idea_05a",
+)
+```
+
+Reads inside a program-lockbox period raise `LockboxViolationError` unless the
+human-only `final_portfolio_review=True` flag is passed; an arm gets exactly
+one validation-period use per dataset (`ValidationReuseError` on reuse);
+`purpose="dev_smoke"` is allowed anywhere but tagged in the log and is never
+research evidence. Reads without a declared purpose are not checked or logged
+and can never be cited as research evidence.
+
 ### Anti-patterns to Avoid
 
 Do NOT use direct parquet access:

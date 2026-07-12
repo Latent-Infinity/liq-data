@@ -48,6 +48,7 @@ from filelock import FileLock, Timeout
 from liq.data.aggregation import aggregate_bars
 from liq.data.exceptions import ProviderNoDataError
 from liq.data.gaps import detect_gaps
+from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, resolve_dataset
 from liq.data.policies import POLICIES
 from liq.data.protocols import BatchJob, BatchMarketDataProvider
 from liq.data.qa import validate_ohlc
@@ -136,6 +137,7 @@ class DataService:
         self._settings = settings or get_settings()
         self._data_root = data_root or self._settings.data_root
         self._store = ParquetStore(str(self._data_root))
+        self._lockbox_guard: LockboxGuard | None = None
 
     @property
     def settings(self) -> LiqDataSettings:
@@ -151,6 +153,41 @@ class DataService:
     def store(self) -> ParquetStore:
         """Get the underlying ParquetStore instance."""
         return self._store
+
+    @property
+    def lockbox_guard(self) -> LockboxGuard:
+        """Lockbox guard for research reads (usage log lives under data_root)."""
+        if self._lockbox_guard is None:
+            self._lockbox_guard = LockboxGuard(usage_log_path=self._data_root / USAGE_LOG_FILENAME)
+        return self._lockbox_guard
+
+    def _guard_research_read(
+        self,
+        provider: str,
+        symbol: str,
+        start: date | None,
+        end: date | None,
+        *,
+        purpose: str | None,
+        arm_id: str | None,
+        final_portfolio_review: bool,
+    ) -> None:
+        """Route a declared-purpose read through the lockbox guard."""
+        if purpose is None:
+            return
+        if not arm_id:
+            raise ValueError("arm_id is required when a research purpose is declared")
+        dataset = resolve_dataset(provider, symbol)
+        if dataset is None:
+            return
+        self.lockbox_guard.assert_period_allowed(
+            dataset,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
+        )
 
     def _storage_key(self, provider: str, symbol: str, timeframe: str) -> str:
         """Build storage key for bars via provider/key_builder."""
@@ -190,6 +227,9 @@ class DataService:
         *,
         streaming: Literal[False] = False,
         batch_size: None = None,
+        purpose: str | None = ...,
+        arm_id: str | None = ...,
+        final_portfolio_review: bool = ...,
     ) -> pl.DataFrame: ...
 
     @overload
@@ -204,6 +244,9 @@ class DataService:
         *,
         streaming: bool = ...,
         batch_size: int | None = ...,
+        purpose: str | None = ...,
+        arm_id: str | None = ...,
+        final_portfolio_review: bool = ...,
     ) -> pl.DataFrame | Iterator[pl.DataFrame]: ...
 
     def load(
@@ -217,6 +260,9 @@ class DataService:
         *,
         streaming: bool = False,
         batch_size: int | None = None,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        final_portfolio_review: bool = False,
     ) -> pl.DataFrame | Iterator[pl.DataFrame]:
         """Load data for a symbol from storage.
 
@@ -229,17 +275,35 @@ class DataService:
             columns: Optional column subset
             streaming: Use Polars streaming engine (memory-efficient)
             batch_size: If set, yield DataFrames in batches
+            purpose: Research purpose of the read (e.g., "discovery",
+                "validation", "dev_smoke"). Declaring a purpose routes the
+                read through the lockbox guard; research reads MUST declare
+                one. Reads without a purpose are never research evidence.
+            arm_id: Research arm consuming the read (required with purpose)
+            final_portfolio_review: Human-only flag permitting program-lockbox
+                reads; recorded in the usage log
 
         Returns:
             DataFrame with OHLCV data
 
         Raises:
             FileNotFoundError: If data doesn't exist
+            LockboxViolationError: If a declared-purpose read violates the
+                lockbox ledger fold boundaries
 
         Example:
             >>> ds = DataService()
             >>> df = ds.load("oanda", "EUR_USD", "1m")
         """
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
+        )
         storage_key = self._storage_key(provider, symbol, timeframe)
         if self._store.exists(storage_key) and timeframe != "1m":
             base_key = self._storage_key(provider, symbol, "1m")
@@ -310,6 +374,9 @@ class DataService:
         columns: list[str] | None = None,
         *,
         batch_size: int = 100_000,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        final_portfolio_review: bool = False,
     ) -> Iterator[pl.DataFrame]:
         """Iterate over data in batches for memory-efficient processing."""
         result = self.load(
@@ -320,6 +387,9 @@ class DataService:
             end=end,
             columns=columns,
             batch_size=batch_size,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
         )
         if isinstance(result, pl.DataFrame):
             yield result
@@ -919,6 +989,9 @@ class DataService:
             UniverseResolver,
         )
 
+        if max_workers <= 0:
+            raise ValueError(f"max_workers must be >= 1; got {max_workers}")
+
         if isinstance(universe, UniverseDefinition):
             definition = universe
         else:
@@ -1008,9 +1081,6 @@ class DataService:
 
             request_start = datetime(start.year, start.month, start.day, tzinfo=UTC)
             request_end = datetime(end.year, end.month, end.day, tzinfo=UTC) + timedelta(days=1)
-
-            if max_workers <= 0:
-                raise ValueError(f"max_workers must be >= 1; got {max_workers}")
 
             counters_lock = threading.Lock()
             rate_limiter_lock = threading.Lock()

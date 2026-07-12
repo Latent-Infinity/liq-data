@@ -48,7 +48,7 @@ from filelock import FileLock, Timeout
 from liq.data.aggregation import aggregate_bars
 from liq.data.exceptions import ProviderNoDataError
 from liq.data.gaps import detect_gaps
-from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, resolve_dataset
+from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, LockboxLedger, resolve_dataset
 from liq.data.policies import POLICIES
 from liq.data.protocols import BatchJob, BatchMarketDataProvider
 from liq.data.qa import validate_ohlc
@@ -127,16 +127,19 @@ class DataService:
         self,
         settings: LiqDataSettings | None = None,
         data_root: Path | None = None,
+        lockbox_ledger: LockboxLedger | None = None,
     ) -> None:
         """Initialize DataService.
 
         Args:
             settings: Optional settings instance (uses get_settings() if not provided)
             data_root: Optional override for data storage directory
+            lockbox_ledger: Optional research lockbox ledger for declared-purpose reads
         """
         self._settings = settings or get_settings()
         self._data_root = data_root or self._settings.data_root
         self._store = ParquetStore(str(self._data_root))
+        self._lockbox_ledger = lockbox_ledger
         self._lockbox_guard: LockboxGuard | None = None
 
     @property
@@ -158,7 +161,15 @@ class DataService:
     def lockbox_guard(self) -> LockboxGuard:
         """Lockbox guard for research reads (usage log lives under data_root)."""
         if self._lockbox_guard is None:
-            self._lockbox_guard = LockboxGuard(usage_log_path=self._data_root / USAGE_LOG_FILENAME)
+            if self._lockbox_ledger is None:
+                self._lockbox_guard = LockboxGuard(
+                    usage_log_path=self._data_root / USAGE_LOG_FILENAME
+                )
+            else:
+                self._lockbox_guard = LockboxGuard(
+                    usage_log_path=self._data_root / USAGE_LOG_FILENAME,
+                    ledger=self._lockbox_ledger,
+                )
         return self._lockbox_guard
 
     def _guard_research_read(
@@ -436,6 +447,7 @@ class DataService:
         timeframe: str = "1m",
         save: bool = True,
         mode: str = "append",
+        dataset: str | None = None,
     ) -> pl.DataFrame:
         """Fetch data from provider.
 
@@ -447,6 +459,10 @@ class DataService:
             timeframe: Timeframe (default: "1m")
             save: Whether to save to storage (default: True)
             mode: Write mode - "append" (merge with existing) or "overwrite"
+            dataset: Optional provider dataset override (Databento only), for
+                securities reachable only on a specific venue dataset (e.g. a
+                delisted name on ``XNAS.ITCH``). Ignored by providers that do
+                not accept it.
 
         Returns:
             DataFrame with fetched OHLCV data
@@ -460,7 +476,8 @@ class DataService:
             end = date.today()
 
         prov = self._get_provider(provider)
-        df = prov.fetch_bars(symbol, start, end, timeframe=timeframe)
+        extra = {"dataset": dataset} if dataset is not None else {}
+        df = prov.fetch_bars(symbol, start, end, timeframe=timeframe, **extra)
         validate_ohlc(df)
 
         if save:

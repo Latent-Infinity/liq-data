@@ -77,29 +77,38 @@ class LockboxLedger:
     datasets: Mapping[str, FoldWindows]
 
 
+# Fold boundaries rolled forward so only the most recent ~6 months stay locked
+# (lockbox_start 2026-01-01): discovery extends through 2024, 2025 is the single
+# recent out-of-sample validation year. Prior arms characterized on their earlier
+# sub-windows remain valid; the change applies to new pre-registrations only.
 INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
-    version="intraday_campaign_v1",
+    version="intraday_campaign_v1.1",
     datasets=MappingProxyType(
         {
             "spy_qqq_ladder_tradestation": FoldWindows(
-                discovery=(date(2015, 1, 1), date(2022, 12, 31)),
-                validation=(date(2023, 1, 1), date(2024, 12, 31)),
-                lockbox_start=date(2025, 1, 1),
+                discovery=(date(2015, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
+                lockbox_start=date(2026, 1, 1),
             ),
             "tradestation_cohort_1m": FoldWindows(
-                discovery=(date(2019, 1, 1), date(2022, 12, 31)),
-                validation=(date(2023, 1, 1), date(2024, 12, 31)),
-                lockbox_start=date(2025, 1, 1),
+                discovery=(date(2019, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
+                lockbox_start=date(2026, 1, 1),
             ),
             "oanda_fx": FoldWindows(
-                discovery=(date(2020, 1, 1), date(2023, 12, 31)),
-                validation=(date(2024, 1, 1), date(2025, 12, 31)),
+                discovery=(date(2020, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
                 lockbox_start=date(2026, 1, 1),
             ),
             "binance_spot": FoldWindows(
-                discovery=(date(2020, 1, 1), date(2023, 12, 31)),
-                validation=(date(2024, 1, 1), date(2024, 12, 31)),
-                lockbox_start=date(2025, 1, 1),
+                discovery=(date(2020, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
+                lockbox_start=date(2026, 1, 1),
+            ),
+            "coinbase_spot": FoldWindows(
+                discovery=(date(2020, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
+                lockbox_start=date(2026, 1, 1),
             ),
             # Folds assigned only after perp depth verification passes.
             "binance_perp": FoldWindows(),
@@ -108,6 +117,26 @@ INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
                 forward_accrual_start=date(2026, 1, 1),
                 allowed_purposes=frozenset({"characterization", "forward_accrual"}),
             ),
+        }
+    ),
+)
+
+_FCE_WINDOWS = FoldWindows(
+    discovery=(date(2020, 1, 1), date(2024, 12, 31)),
+    validation=(date(2025, 1, 1), date(2025, 12, 31)),
+    lockbox_start=date(2026, 1, 1),
+)
+
+FCE_LOCKBOX_LEDGER_V1 = LockboxLedger(
+    version="fce_v1_2020_2026",
+    datasets=MappingProxyType(
+        {
+            "spy_qqq_ladder_tradestation": _FCE_WINDOWS,
+            "tradestation_cohort_1m": _FCE_WINDOWS,
+            "oanda_fx": _FCE_WINDOWS,
+            "coinbase_spot": _FCE_WINDOWS,
+            "databento_extended_hours": _FCE_WINDOWS,
+            "fred_macro": _FCE_WINDOWS,
         }
     ),
 )
@@ -132,6 +161,8 @@ def resolve_dataset(provider: str, symbol: str) -> str | None:
         return "oanda_fx"
     if provider == "binance":
         return "binance_spot"
+    if provider == "coinbase":
+        return "coinbase_spot"
     if provider == "databento":
         return "databento_extended_hours"
     return None

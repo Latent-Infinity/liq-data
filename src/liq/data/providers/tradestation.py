@@ -451,6 +451,54 @@ class TradeStationProvider(BaseProvider):
 
         return self.bars_to_dataframe(all_bars)
 
+    def fetch_quote_snapshots(self, symbols: list[str]) -> pl.DataFrame:
+        """Fetch snapshot quotes for ``symbols`` (batched, max 100 per request).
+
+        Returns a DataFrame with columns: symbol, last, high, low,
+        previous_close. Quotes without a numeric ``Last`` (halted, unknown
+        symbol) are skipped — never fabricated.
+
+        Raises:
+            ValueError: If ``symbols`` is empty
+            ProviderError: If an API call fails
+        """
+        if not symbols:
+            raise ValueError("symbols must be non-empty")
+        self._ensure_authenticated()
+
+        rows: list[dict] = []
+        batch_size = 100
+        for i in range(0, len(symbols), batch_size):
+            batch = [self._normalize_symbol(s) for s in symbols[i : i + batch_size]]
+            data = self._make_request_with_backoff(
+                "GET", f"/marketdata/quotes/{','.join(batch)}", {}
+            )
+            for quote in data.get("Quotes", []):
+                last = quote.get("Last")
+                if last is None:
+                    continue
+                try:
+                    rows.append(
+                        {
+                            "symbol": quote["Symbol"],
+                            "last": float(last),
+                            "high": float(quote["High"]),
+                            "low": float(quote["Low"]),
+                            "previous_close": float(quote["PreviousClose"]),
+                        }
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue  # partial quote — skip, never fabricate
+
+        schema = {
+            "symbol": pl.Utf8,
+            "last": pl.Float64,
+            "high": pl.Float64,
+            "low": pl.Float64,
+            "previous_close": pl.Float64,
+        }
+        return pl.DataFrame(rows, schema=schema)
+
     def list_instruments(self, asset_class: str | None = None) -> pl.DataFrame:
         """List available instruments from TradeStation.
 

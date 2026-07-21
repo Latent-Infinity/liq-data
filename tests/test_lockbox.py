@@ -65,6 +65,7 @@ class TestFceLedger:
             "oanda_fx",
             "coinbase_spot",
             "databento_extended_hours",
+            "databento_opra_options",
             "fred_macro",
         }
         assert set(FCE_LOCKBOX_LEDGER_V1.datasets) == expected
@@ -460,6 +461,72 @@ class TestResolveDataset:
     )
     def test_mapping(self, provider: str, symbol: str, expected: str | None) -> None:
         assert resolve_dataset(provider, symbol) == expected
+
+    def test_databento_option_asset_class_routes_to_opra(self) -> None:
+        # Options reads must resolve to their own fold-governed dataset so the
+        # guard can distinguish an OPRA read from an equity-bars read.
+        assert resolve_dataset("databento", "SPY", asset_class="option") == "databento_opra_options"
+
+    @pytest.mark.parametrize("asset_class", [None, "equity", "future"])
+    def test_databento_non_option_asset_class_stays_bars(self, asset_class: str | None) -> None:
+        assert (
+            resolve_dataset("databento", "AAPL", asset_class=asset_class)
+            == "databento_extended_hours"
+        )
+
+    def test_asset_class_ignored_for_non_databento_providers(self) -> None:
+        assert resolve_dataset("oanda", "EUR_USD", asset_class="option") == "oanda_fx"
+
+
+class TestDatabentoOptions:
+    """The OPRA options dataset is fold-governed independently of equity bars."""
+
+    def test_opra_dataset_has_fce_windows(self) -> None:
+        windows = FCE_LOCKBOX_LEDGER_V1.datasets["databento_opra_options"]
+        assert windows.discovery == (date(2020, 1, 1), date(2024, 12, 31))
+        assert windows.validation == (date(2025, 1, 1), date(2025, 12, 31))
+        assert windows.lockbox_start == date(2026, 1, 1)
+
+    def test_options_discovery_read_allowed(self, tmp_path: Path) -> None:
+        guard = LockboxGuard(
+            usage_log_path=tmp_path / "lockbox_usage_log.jsonl",
+            ledger=FCE_LOCKBOX_LEDGER_V1,
+        )
+        guard.assert_period_allowed(
+            "databento_opra_options",
+            date(2020, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="path_a_gamma_flow",
+        )
+        assert read_log(guard)[0]["dataset"] == "databento_opra_options"
+
+    def test_options_lockbox_read_refused(self, tmp_path: Path) -> None:
+        guard = LockboxGuard(
+            usage_log_path=tmp_path / "lockbox_usage_log.jsonl",
+            ledger=FCE_LOCKBOX_LEDGER_V1,
+        )
+        with pytest.raises(LockboxViolationError, match="program lockbox"):
+            guard.assert_period_allowed(
+                "databento_opra_options",
+                date(2026, 1, 1),
+                date(2026, 12, 31),
+                purpose="discovery",
+                arm_id="path_a_gamma_flow",
+            )
+
+    def test_options_validation_read_within_2025_allowed(self, tmp_path: Path) -> None:
+        guard = LockboxGuard(
+            usage_log_path=tmp_path / "lockbox_usage_log.jsonl",
+            ledger=FCE_LOCKBOX_LEDGER_V1,
+        )
+        guard.assert_period_allowed(
+            "databento_opra_options",
+            date(2025, 1, 1),
+            date(2025, 12, 31),
+            purpose="validation",
+            arm_id="path_a_gamma_flow",
+        )
 
 
 class TestDataServiceIntegration:

@@ -136,6 +136,7 @@ FCE_LOCKBOX_LEDGER_V1 = LockboxLedger(
             "oanda_fx": _FCE_WINDOWS,
             "coinbase_spot": _FCE_WINDOWS,
             "databento_extended_hours": _FCE_WINDOWS,
+            "databento_opra_options": _FCE_WINDOWS,
             "fred_macro": _FCE_WINDOWS,
         }
     ),
@@ -146,8 +147,13 @@ _LADDER_SYMBOLS = frozenset({"SPY", "QQQ"})
 USAGE_LOG_FILENAME = "lockbox_usage_log.jsonl"
 
 
-def resolve_dataset(provider: str, symbol: str) -> str | None:
+def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = None) -> str | None:
     """Map a provider/symbol pair to its ledger dataset name.
+
+    ``asset_class`` discriminates reads that share a provider but must be
+    fold-governed independently. For Databento, an ``"option"`` read resolves
+    to the OPRA options dataset so the guard cannot conflate it with an
+    equity-bars read; any other asset class keeps the equity-bars mapping.
 
     Returns ``None`` for providers outside the campaign ledger (their reads
     are not fold-governed).
@@ -164,6 +170,8 @@ def resolve_dataset(provider: str, symbol: str) -> str | None:
     if provider == "coinbase":
         return "coinbase_spot"
     if provider == "databento":
+        if asset_class == "option":
+            return "databento_opra_options"
         return "databento_extended_hours"
     return None
 

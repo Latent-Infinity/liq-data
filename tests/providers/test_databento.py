@@ -31,6 +31,7 @@ from liq.data.exceptions import ProviderNoDataError
 from liq.data.providers.databento import (
     DATABENTO_BATCH_THRESHOLD_DAYS,
     DATABENTO_PRICE_SCALE,
+    DATABENTO_UNDEF_PRICE,
     DATASET_ROUTING,
     AggregateCrossCheckError,
     DatabentoBarRecord,
@@ -300,6 +301,130 @@ class TestNormalization:
         records = _sample_records(symbol="AAPL") + _sample_records(symbol="MSFT")
         df = _records_to_dataframe(records)
         assert set(df["symbol"].to_list()) == {"AAPL", "MSFT"}
+
+
+# ----- UNDEF_PRICE sentinel exclusion ----------------------------------------
+
+
+def _undef_record(
+    field: str,
+    *,
+    symbol: str = "AAPL",
+    ts_offset_min: int = 5,
+) -> DatabentoBarRecord:
+    """A bar identical to the sample bar but with ``field`` set to the
+    Databento UNDEF_PRICE sentinel (INT64_MAX) instead of a scaled price."""
+    base_ns = int(datetime(2025, 1, 2, 14, 30, tzinfo=UTC).timestamp() * 1e9)
+    fields = {
+        "open_q9": int(Decimal("150.25") * DATABENTO_PRICE_SCALE),
+        "high_q9": int(Decimal("150.75") * DATABENTO_PRICE_SCALE),
+        "low_q9": int(Decimal("150.10") * DATABENTO_PRICE_SCALE),
+        "close_q9": int(Decimal("150.50") * DATABENTO_PRICE_SCALE),
+    }
+    fields[field] = DATABENTO_UNDEF_PRICE
+    return DatabentoBarRecord(
+        ts_event_ns=base_ns + ts_offset_min * 60 * 1_000_000_000,
+        instrument_id=12345,
+        volume=1_000,
+        symbol=symbol,
+        **fields,
+    )
+
+
+class TestUndefPriceExclusion:
+    """A bar whose ANY OHLC field is Databento's UNDEF_PRICE sentinel
+    (INT64_MAX) is a no-trade artifact — blindly scaling it would emit a
+    ~$9.2e9 phantom price. Such bars are excluded, never imputed."""
+
+    def test_constant_is_int64_max(self) -> None:
+        assert DATABENTO_UNDEF_PRICE == 9223372036854775807
+
+    def test_constant_matches_databento_sdk(self) -> None:
+        databento_dbn = pytest.importorskip("databento_dbn")
+        assert DATABENTO_UNDEF_PRICE == databento_dbn.UNDEF_PRICE
+
+    def test_bar_with_undef_high_is_excluded(self) -> None:
+        valid = _sample_records(1, symbol="AAPL")[0]
+        df = _records_to_dataframe([valid, _undef_record("high_q9")])
+        assert df.height == 1  # the undef bar is dropped
+        row = df.row(0, named=True)
+        # Valid bar passes through unchanged with exact Decimals.
+        assert row["open"] == Decimal("150.25")
+        assert row["high"] == Decimal("150.75")
+        assert row["low"] == Decimal("150.10")
+        assert row["close"] == Decimal("150.50")
+
+    def test_bar_with_undef_close_is_excluded(self) -> None:
+        valid = _sample_records(1, symbol="AAPL")[0]
+        df = _records_to_dataframe([valid, _undef_record("close_q9", ts_offset_min=6)])
+        assert df.height == 1
+        assert df.row(0, named=True)["close"] == Decimal("150.50")
+
+    def test_no_phantom_price_leaks_into_frame(self) -> None:
+        # The bug: Decimal(INT64_MAX) / 1e9 ≈ 9_223_372_036.85 — a phantom
+        # ~$9.2e9 breakout. Assert no such value survives conversion.
+        phantom = (Decimal(DATABENTO_UNDEF_PRICE) / DATABENTO_PRICE_SCALE).quantize(Decimal("1e-8"))
+        df = _records_to_dataframe([_undef_record("high_q9")])
+        assert df.is_empty()
+        assert phantom not in df["high"].to_list()
+
+    def test_all_ohlc_undef_fields_are_each_excluded(self) -> None:
+        # Any of the four OHLC fields carrying the sentinel drops the bar.
+        for field in ("open_q9", "high_q9", "low_q9", "close_q9"):
+            df = _records_to_dataframe([_undef_record(field)])
+            assert df.is_empty(), f"{field} sentinel should exclude the bar"
+
+    def test_valid_high_price_near_top_of_range_is_not_excluded(self) -> None:
+        # A very high but real equity price (e.g. BRK.A-scale) is far below
+        # INT64_MAX q9 (~$9.2e9), so the guard never touches it.
+        top = Decimal("750000.00")
+        rec = DatabentoBarRecord(
+            ts_event_ns=int(datetime(2025, 1, 2, 14, 30, tzinfo=UTC).timestamp() * 1e9),
+            instrument_id=12345,
+            open_q9=int(top * DATABENTO_PRICE_SCALE),
+            high_q9=int(top * DATABENTO_PRICE_SCALE),
+            low_q9=int(top * DATABENTO_PRICE_SCALE),
+            close_q9=int(top * DATABENTO_PRICE_SCALE),
+            volume=1,
+            symbol="BRK.A",
+        )
+        df = _records_to_dataframe([rec])
+        assert df.height == 1
+        assert df.row(0, named=True)["high"] == top
+
+    def test_excluded_count_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        records = [
+            _sample_records(1, symbol="AAPL")[0],
+            _undef_record("high_q9", symbol="AAPL", ts_offset_min=5),
+            _undef_record("close_q9", symbol="AAPL", ts_offset_min=6),
+        ]
+        with caplog.at_level(logging.INFO, logger="liq.data.providers.databento"):
+            df = _records_to_dataframe(records)
+        assert df.height == 1
+        events = [
+            r
+            for r in caplog.records
+            if getattr(r, "event", None) == "databento_undef_price_excluded"
+        ]
+        assert events, "expected an INFO log with event=databento_undef_price_excluded"
+        assert events[0].symbol == "AAPL"  # type: ignore[attr-defined]
+        assert events[0].count == 2  # type: ignore[attr-defined]
+
+    def test_no_log_when_no_undef_prices(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.INFO, logger="liq.data.providers.databento"):
+            _records_to_dataframe(_sample_records(2))
+        assert not [
+            r
+            for r in caplog.records
+            if getattr(r, "event", None) == "databento_undef_price_excluded"
+        ]
+
+    def test_undef_excluded_through_fetch_bars(self) -> None:
+        # End-to-end: a store that streams a sentinel bar must not leak it.
+        records = [_sample_records(1)[0], _undef_record("high_q9")]
+        provider, _ = _make_provider(records=records)
+        df = provider.fetch_bars("AAPL", date(2025, 1, 2), date(2025, 1, 3), timeframe="1m")
+        assert df.height == 1
 
 
 # ----- symbology persistence -------------------------------------------------

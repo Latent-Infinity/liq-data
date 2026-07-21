@@ -101,6 +101,21 @@ Prices arrive as int64; we divide by this exact rational and store as
 ``Decimal`` with the schema scale of 8 places. **No float intermediate.**
 """
 
+DATABENTO_UNDEF_PRICE: int = 9223372036854775807
+"""Databento's documented sentinel for an undefined / no-trade price
+(``INT64_MAX``).
+
+The SDK ships it as ``databento_dbn.UNDEF_PRICE`` (re-exported as
+``databento.UNDEF_PRICE``); the equality is asserted by a regression test
+so this literal keeps the module importable without paying the SDK's
+import cost on the hot path. A bar carrying this value in any OHLC field
+has no valid price: blindly scaling it via
+``Decimal(int) / DATABENTO_PRICE_SCALE`` would emit a ~$9.2e9 phantom
+price, so such bars are **excluded** (never imputed) at conversion time.
+Real equity prices are orders of magnitude below the sentinel's q9 value
+(~$9.2e9), so the guard cannot drop a genuine price.
+"""
+
 SYMBOLOGY_KEY = "reference/databento/symbology"
 """``liq-store`` key prefix for the symbology mapping table."""
 
@@ -295,6 +310,21 @@ def _q9_to_decimal(value_q9: int) -> Decimal:
     return (Decimal(value_q9) / DATABENTO_PRICE_SCALE).quantize(_PRICE_QUANT)
 
 
+def _has_undef_price(record: DatabentoBarRecord) -> bool:
+    """True when any OHLC field carries Databento's UNDEF_PRICE sentinel.
+
+    The bar is a no-trade artifact and must be excluded rather than
+    scaled (scaling ``INT64_MAX`` q9 would emit a ~$9.2e9 phantom price).
+    Volume is deliberately not checked — only prices carry the sentinel.
+    """
+    return DATABENTO_UNDEF_PRICE in (
+        record.open_q9,
+        record.high_q9,
+        record.low_q9,
+        record.close_q9,
+    )
+
+
 _DBN_FILE_SUFFIXES = (".dbn", ".dbn.zst", ".dbn.gz")
 
 
@@ -406,6 +436,35 @@ def _records_to_dataframe(records: list[DatabentoBarRecord]) -> pl.DataFrame:
     if not records:
         return pl.DataFrame(schema=schema)
 
+    # Exclude no-trade bars whose price fields carry Databento's
+    # UNDEF_PRICE sentinel (INT64_MAX). Scaling the sentinel would leak a
+    # ~$9.2e9 phantom price into stored OHLCV; missing ⇒ exclusion, not
+    # imputation. Excluded counts are logged per symbol so the drop is
+    # observable in the run's telemetry.
+    valid_records: list[DatabentoBarRecord] = []
+    excluded_by_symbol: dict[str, int] = {}
+    for r in records:
+        if _has_undef_price(r):
+            excluded_by_symbol[r.symbol] = excluded_by_symbol.get(r.symbol, 0) + 1
+        else:
+            valid_records.append(r)
+
+    for symbol, count in excluded_by_symbol.items():
+        _logger.info(
+            "databento undef-price bars excluded %s %d",
+            symbol,
+            count,
+            extra={
+                "event": "databento_undef_price_excluded",
+                "provider": "databento",
+                "symbol": symbol,
+                "count": count,
+            },
+        )
+
+    if not valid_records:
+        return pl.DataFrame(schema=schema)
+
     rows = [
         {
             "timestamp": datetime.fromtimestamp(r.ts_event_ns / 1e9, tz=UTC),
@@ -417,7 +476,7 @@ def _records_to_dataframe(records: list[DatabentoBarRecord]) -> pl.DataFrame:
             "close": _q9_to_decimal(r.close_q9),
             "volume": Decimal(int(r.volume)),
         }
-        for r in records
+        for r in valid_records
     ]
     return pl.DataFrame(rows, schema=schema)
 
@@ -1618,6 +1677,7 @@ __all__ = [
     "DATABENTO_DEFAULT_BATCH_POLL_SECONDS",
     "DATABENTO_DEFAULT_MAX_RETRY_ATTEMPTS",
     "DATABENTO_PRICE_SCALE",
+    "DATABENTO_UNDEF_PRICE",
     "DATASET_ROUTING",
     "SCHEMA_BY_TIMEFRAME",
     "SYMBOLOGY_KEY",

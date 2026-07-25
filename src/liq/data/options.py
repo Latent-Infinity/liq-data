@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Protocol, runtime_checkable
 
 import polars as pl
@@ -138,7 +139,13 @@ class GammaFlowDataPort(Protocol):
     def fetch_option_ohlcv(self, underlying: str, start: date, end: date) -> pl.DataFrame: ...
 
     def build_gamma_flow_frame(
-        self, underlying: str, as_of: date, *, oi_lag_sessions: int
+        self,
+        underlying: str,
+        as_of: date,
+        *,
+        oi_lag_sessions: int,
+        spot: Decimal,
+        spot_as_of: date,
     ) -> GammaFlowFrame: ...
 
 

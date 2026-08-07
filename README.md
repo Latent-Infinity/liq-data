@@ -54,6 +54,25 @@ one validation-period use per dataset (`ValidationReuseError` on reuse);
 research evidence. Reads without a declared purpose are not checked or logged
 and can never be cited as research evidence.
 
+### SEC 8-K event metadata
+
+`SECEdgarProvider.fetch_8k_events` returns exact-token matches for registered
+8-K item families together with acceptance, accession, and primary-document
+metadata. The returned lookup symbol is not point-in-time identity evidence;
+research consumers must verify CIK-to-symbol history separately.
+
+`SECEdgarProvider.fetch_accession_metadata` reads one official complete-
+submission SGML file and returns the filing's Inline-XBRL trading-symbol facts,
+exact document types, and an `EX-99.1` attachment flag. This evidence is bound
+to the filing accession and never falls back to the current ticker map. Missing
+or multiple filing symbols remain explicit for downstream exclusion and
+coverage reporting.
+
+`resolve_edgar_event_clock` converts a timezone-aware SEC acceptance timestamp
+into the XNYS session bucket, public/event timestamps, reaction-window end, and
+latency decision timestamps. Before-open, after-close, weekend, and holiday
+events are re-anchored to the applicable next regular-session open.
+
 ### Anti-patterns to Avoid
 
 Do NOT use direct parquet access:

@@ -10,16 +10,52 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 import httpx
+import polars as pl
 import pytest
 import respx
 
 from liq.data.exceptions import ConfigurationError, ProviderError, RateLimitError
-from liq.data.providers.sec_edgar import SECEdgarProvider
+from liq.data.providers.sec_edgar import (
+    SECEdgarProvider,
+    complete_submission_url,
+    parse_edgar_accession_metadata,
+)
 from liq.data.settings import LiqDataSettings, create_sec_edgar_provider
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK0000320193.json"
 ARCHIVE_URL = "https://data.sec.gov/submissions/CIK0000320193-submissions-001.json"
+COMPLETE_SUBMISSION_URL = (
+    "https://www.sec.gov/Archives/edgar/data/320193/000032019323000075/0000320193-23-000075.txt"
+)
+
+# Reduced structural fixture from Apple accession 0000320193-23-000075. It
+# retains the SEC PDS document envelope and Inline XBRL identity fact without
+# copying filing narrative or financial content.
+ACCESSION_SUBMISSION = """\
+<SEC-DOCUMENT>0000320193-23-000075.txt
+<DOCUMENT>
+<TYPE>8-K
+<SEQUENCE>1
+<FILENAME>aapl-20230803.htm
+<DESCRIPTION>8-K
+<TEXT>
+<html xmlns:ix="http://www.xbrl.org/2013/inlineXBRL">
+<body>
+<ix:nonNumeric name="dei:TradingSymbol" contextRef="c-1">AAPL</ix:nonNumeric>
+<ix:nonNumeric name="dei:TradingSymbol" contextRef="c-2">&#8212;</ix:nonNumeric>
+</body>
+</html>
+</TEXT>
+</DOCUMENT>
+<DOCUMENT>
+<TYPE>EX-99.1
+<SEQUENCE>2
+<FILENAME>a8-kex991q3202307012023.htm
+<DESCRIPTION>EX-99.1
+<TEXT><html><body>Attachment omitted.</body></html></TEXT>
+</DOCUMENT>
+"""
 
 TICKERS_JSON = {
     "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
@@ -177,6 +213,199 @@ class TestFetchEarningsEvents:
             ["AAPL"], start=date(2022, 1, 1), end=date(2023, 12, 31)
         )
         assert date(2022, 2, 1) in df["filing_date"].to_list()
+
+
+class TestFetch8KEvents:
+    @respx.mock
+    def test_extracts_registered_item_families_with_metadata(self) -> None:
+        respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))
+        payload = {
+            "filings": {
+                "recent": {
+                    "form": ["8-K", "8-K", "8-K", "8-K", "8-K", "10-Q"],
+                    "filingDate": ["2023-08-03"] * 6,
+                    "acceptanceDateTime": [
+                        "2023-08-03T16:30:15.000Z",
+                        "2023-08-03T17:00:00.000Z",
+                        "2023-08-03T17:30:00.000Z",
+                        "2023-08-03T18:00:00.000Z",
+                        "2023-08-03T18:30:00.000Z",
+                        "2023-08-03T19:00:00.000Z",
+                    ],
+                    "accessionNumber": ["a-1", "a-2", "a-3", "a-4", "a-5", "a-6"],
+                    "items": [
+                        "1.01,9.01",
+                        "5.02,7.01",
+                        "2.01",
+                        "2.02,9.01",
+                        "8.01,9.01",
+                        "2.02",
+                    ],
+                    "primaryDocument": [
+                        "a1.htm",
+                        "a2.htm",
+                        "a3.htm",
+                        "a4.htm",
+                        "a5.htm",
+                        "q.htm",
+                    ],
+                    "primaryDocDescription": [
+                        "Material agreement",
+                        "Officer and Regulation FD disclosure",
+                        "Acquisition",
+                        "Results of operations",
+                        "Other events",
+                        "Quarterly report",
+                    ],
+                },
+                "files": [],
+            }
+        }
+        respx.get(SUBMISSIONS_URL).mock(return_value=httpx.Response(200, json=payload))
+
+        frame = _provider().fetch_8k_events(
+            ["AAPL"],
+            start=date(2023, 1, 1),
+            end=date(2023, 12, 31),
+            item_types={"1.01", "2.02", "5.02", "7.01", "8.01"},
+        )
+
+        assert frame["accession_number"].to_list() == ["a-1", "a-2", "a-4", "a-5"]
+        assert frame["matched_items"].to_list() == [
+            ["1.01"],
+            ["5.02", "7.01"],
+            ["2.02"],
+            ["8.01"],
+        ]
+        assert frame["primary_document"].to_list() == [
+            "a1.htm",
+            "a2.htm",
+            "a4.htm",
+            "a5.htm",
+        ]
+        assert frame["primary_document_description"].to_list() == [
+            "Material agreement",
+            "Officer and Regulation FD disclosure",
+            "Results of operations",
+            "Other events",
+        ]
+
+    @respx.mock
+    def test_item_matching_uses_exact_tokens(self) -> None:
+        respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))
+        payload = {
+            "filings": {
+                "recent": {
+                    "form": ["8-K", "8-K"],
+                    "filingDate": ["2023-08-03", "2023-08-03"],
+                    "acceptanceDateTime": [
+                        "2023-08-03T16:30:15.000Z",
+                        "2023-08-03T17:00:00.000Z",
+                    ],
+                    "accessionNumber": ["a-1", "a-2"],
+                    "items": ["12.02", "2.02"],
+                },
+                "files": [],
+            }
+        }
+        respx.get(SUBMISSIONS_URL).mock(return_value=httpx.Response(200, json=payload))
+
+        frame = _provider().fetch_8k_events(
+            ["AAPL"],
+            start=date(2023, 1, 1),
+            end=date(2023, 12, 31),
+            item_types={"2.02"},
+        )
+
+        assert frame["accession_number"].to_list() == ["a-2"]
+
+    @respx.mock
+    def test_empty_result_preserves_generic_schema(self) -> None:
+        respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))
+        respx.get(SUBMISSIONS_URL).mock(return_value=httpx.Response(200, json=SUBMISSIONS_JSON))
+
+        frame = _provider().fetch_8k_events(
+            ["AAPL"],
+            start=date(2010, 1, 1),
+            end=date(2010, 12, 31),
+        )
+
+        assert frame.height == 0
+        assert "matched_items" in frame.columns
+        assert frame.schema["acceptance_datetime"] == pl.Datetime("us", "UTC")
+
+
+class TestAccessionMetadata:
+    def test_complete_submission_url_is_bound_to_cik_and_accession(self) -> None:
+        assert complete_submission_url(320193, "0000320193-23-000075") == COMPLETE_SUBMISSION_URL
+
+    @pytest.mark.parametrize(
+        ("cik", "accession"),
+        [
+            ("not-a-cik", "0000320193-23-000075"),
+            ("0000320193", "../0000320193-23-000075"),
+        ],
+    )
+    def test_complete_submission_url_rejects_invalid_identifiers(
+        self,
+        cik: str,
+        accession: str,
+    ) -> None:
+        with pytest.raises(ValueError, match="CIK|accession"):
+            complete_submission_url(cik, accession)
+
+    def test_extracts_filing_symbol_and_exact_attachment_type(self) -> None:
+        metadata = parse_edgar_accession_metadata(
+            ACCESSION_SUBMISSION,
+            cik="0000320193",
+            accession_number="0000320193-23-000075",
+        )
+
+        assert metadata.cik == "0000320193"
+        assert metadata.accession_number == "0000320193-23-000075"
+        assert metadata.filing_symbols == ("AAPL",)
+        assert metadata.has_ex_99_1 is True
+        assert metadata.document_types == ("8-K", "EX-99.1")
+        assert metadata.source_url == COMPLETE_SUBMISSION_URL
+
+    def test_does_not_treat_nearby_exhibit_type_as_ex_99_1(self) -> None:
+        metadata = parse_edgar_accession_metadata(
+            ACCESSION_SUBMISSION.replace("<TYPE>EX-99.1\n", "<TYPE>EX-99.10\n"),
+            cik="0000320193",
+            accession_number="0000320193-23-000075",
+        )
+
+        assert metadata.has_ex_99_1 is False
+        assert metadata.document_types == ("8-K", "EX-99.10")
+
+    def test_missing_trading_symbol_is_explicit_not_backfilled(self) -> None:
+        metadata = parse_edgar_accession_metadata(
+            ACCESSION_SUBMISSION.replace(
+                '<ix:nonNumeric name="dei:TradingSymbol" contextRef="c-1">AAPL</ix:nonNumeric>',
+                "",
+            ),
+            cik="0000320193",
+            accession_number="0000320193-23-000075",
+        )
+
+        assert metadata.filing_symbols == ()
+        assert metadata.has_ex_99_1 is True
+
+    @respx.mock
+    def test_provider_fetches_one_accession_bound_source(self) -> None:
+        route = respx.get(COMPLETE_SUBMISSION_URL).mock(
+            return_value=httpx.Response(200, text=ACCESSION_SUBMISSION)
+        )
+
+        metadata = _provider().fetch_accession_metadata(
+            "0000320193",
+            "0000320193-23-000075",
+        )
+
+        assert metadata.filing_symbols == ("AAPL",)
+        assert metadata.has_ex_99_1 is True
+        assert route.call_count == 1
+        assert route.calls.last.request.headers["User-Agent"] == "test test@example.com"
 
 
 class TestErrors:

@@ -82,7 +82,7 @@ class LockboxLedger:
 # recent out-of-sample validation year. Prior arms characterized on their earlier
 # sub-windows remain valid; the change applies to new pre-registrations only.
 INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
-    version="intraday_campaign_v1.1",
+    version="intraday_campaign_v1.2",
     datasets=MappingProxyType(
         {
             "spy_qqq_ladder_tradestation": FoldWindows(
@@ -112,6 +112,16 @@ INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
             ),
             # Folds assigned only after perp depth verification passes.
             "binance_perp": FoldWindows(),
+            # CME micro crypto futures (@MBT from 2021, @MET from 2022). Depth
+            # verified; fold windows frozen 2026-08-05 by the basis-carry
+            # pre-registration. Discovery starts 2022 (the
+            # common BTC+ETH inception); the ragged @MBT-2021 tail is excluded
+            # from pooled discovery, never backfilled (PD-6).
+            "tradestation_crypto_futures": FoldWindows(
+                discovery=(date(2022, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
+                lockbox_start=date(2026, 1, 1),
+            ),
             "databento_extended_hours": FoldWindows(
                 characterization=(date(2023, 1, 1), date(2025, 12, 31)),
                 forward_accrual_start=date(2026, 1, 1),
@@ -143,6 +153,7 @@ FCE_LOCKBOX_LEDGER_V1 = LockboxLedger(
 )
 
 _LADDER_SYMBOLS = frozenset({"SPY", "QQQ"})
+_CRYPTO_FUTURES_CONTINUOUS_SYMBOLS = frozenset({"@MBT", "@MET"})
 
 USAGE_LOG_FILENAME = "lockbox_usage_log.jsonl"
 
@@ -153,13 +164,19 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
     ``asset_class`` discriminates reads that share a provider but must be
     fold-governed independently. For Databento, an ``"option"`` read resolves
     to the OPRA options dataset so the guard cannot conflate it with an
-    equity-bars read; any other asset class keeps the equity-bars mapping.
+    equity-bars read. For TradeStation, a ``"future"`` read resolves to the
+    crypto-futures dataset for the same reason. The unambiguous continuous
+    symbols ``@MBT`` and ``@MET`` also route there when the hint is omitted;
+    bare ``MET`` remains an equity unless explicitly declared as a future.
+    Any other asset class keeps the equity-bars mapping.
 
     Returns ``None`` for providers outside the campaign ledger (their reads
     are not fold-governed).
     """
     provider = provider.lower()
     if provider == "tradestation":
+        if asset_class == "future" or symbol.upper() in _CRYPTO_FUTURES_CONTINUOUS_SYMBOLS:
+            return "tradestation_crypto_futures"
         if symbol.upper() in _LADDER_SYMBOLS:
             return "spy_qqq_ladder_tradestation"
         return "tradestation_cohort_1m"

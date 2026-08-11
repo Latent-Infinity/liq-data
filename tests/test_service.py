@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
+from liq.data.exceptions import LockboxViolationError
 from liq.data.service import DataService
 from liq.store import key_builder
 from liq.store.parquet import ParquetStore
@@ -762,3 +763,81 @@ class TestDataServiceExtended:
         symbols = ds.list_symbols()
 
         assert {"provider": "oanda", "symbol": "EUR_USD", "timeframe": "1m"} in symbols
+
+
+class TestDataServiceResearchReadAssetClass:
+    """asset_class must thread through the research-read guard so a futures read
+    is fold-governed by ``tradestation_crypto_futures`` and not the equity cohort.
+
+    Without threading, a declared-purpose read of ``@MBT``/``@MET`` silently
+    resolves to ``tradestation_cohort_1m`` and borrows the equity cohort's fold
+    windows -- a lockbox-governance bug.
+    """
+
+    ARM = "path_e_crypto_basis_carry"
+
+    def test_future_read_governed_by_crypto_futures_windows(self, tmp_path: Path) -> None:
+        """A future-class read resolves to the crypto-futures dataset: 2021
+        precedes its frozen 2022 discovery start, so the read is rejected --
+        the equity cohort (discovery from 2019) would have admitted it."""
+        ds = DataService(data_root=tmp_path)
+        with pytest.raises(LockboxViolationError):
+            ds._guard_research_read(
+                "tradestation",
+                "@MBT",
+                date(2021, 1, 1),
+                date(2021, 12, 31),
+                purpose="discovery",
+                arm_id=self.ARM,
+                final_portfolio_review=False,
+                asset_class="future",
+            )
+
+    def test_unambiguous_future_symbol_is_safe_without_asset_class(self, tmp_path: Path) -> None:
+        """Known ``@MBT``/``@MET`` roots cannot bypass their frozen fold by omission."""
+        ds = DataService(data_root=tmp_path)
+        with pytest.raises(LockboxViolationError):
+            ds._guard_research_read(
+                "tradestation",
+                "@MBT",
+                date(2021, 1, 1),
+                date(2021, 12, 31),
+                purpose="discovery",
+                arm_id=self.ARM,
+                final_portfolio_review=False,
+            )
+
+    def test_load_threads_asset_class_to_guard(self, tmp_path: Path) -> None:
+        """End-to-end: ``load`` rejects an out-of-window futures discovery read
+        via the guard before touching the store, proving ``asset_class`` threads
+        through (2021 precedes the frozen 2022 crypto-futures discovery start)."""
+        ds = DataService(data_root=tmp_path)
+        with pytest.raises(LockboxViolationError):
+            ds.load(
+                "tradestation",
+                "@MBT",
+                "1d",
+                date(2021, 1, 1),
+                date(2021, 12, 31),
+                purpose="discovery",
+                arm_id=self.ARM,
+                asset_class="future",
+            )
+
+    def test_non_research_future_read_is_unguarded(self, tmp_path: Path) -> None:
+        """purpose=None short-circuits the guard regardless of asset_class
+        (backward compatible)."""
+        ds = DataService(data_root=tmp_path)
+        assert (
+            ds._guard_research_read(
+                "tradestation",
+                "@MBT",
+                None,
+                None,
+                purpose=None,
+                arm_id=None,
+                final_portfolio_review=False,
+                asset_class="future",
+            )
+            is None
+        )

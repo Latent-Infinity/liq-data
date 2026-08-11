@@ -41,6 +41,7 @@ class TestLedger:
             "binance_perp",
             "coinbase_spot",
             "databento_extended_hours",
+            "tradestation_crypto_futures",
         }
         assert set(INTRADAY_CAMPAIGN_LEDGER_V1.datasets) == expected
 
@@ -474,8 +475,112 @@ class TestResolveDataset:
             == "databento_extended_hours"
         )
 
-    def test_asset_class_ignored_for_non_databento_providers(self) -> None:
+    def test_asset_class_ignored_for_providers_without_a_discriminator(self) -> None:
         assert resolve_dataset("oanda", "EUR_USD", asset_class="option") == "oanda_fx"
+
+    def test_tradestation_future_asset_class_routes_to_crypto_futures(self) -> None:
+        # Mirrors the databento option discriminator: a futures read must be
+        # fold-governed independently of the equity cohort.
+        assert (
+            resolve_dataset("tradestation", "@MET", asset_class="future")
+            == "tradestation_crypto_futures"
+        )
+
+    @pytest.mark.parametrize("symbol", ["@MBT", "@MET"])
+    def test_unambiguous_continuous_crypto_symbols_route_without_hint(self, symbol: str) -> None:
+        """Known continuous crypto roots must not silently borrow equity folds."""
+        assert resolve_dataset("tradestation", symbol) == "tradestation_crypto_futures"
+
+    @pytest.mark.parametrize("symbol", ["@MET", "@MBT", "MET", "MBT"])
+    def test_futures_read_never_resolves_to_the_equity_cohort(self, symbol: str) -> None:
+        """The bug this closes: MET is micro ether at the CME and MetLife in equities.
+
+        Without the discriminator a crypto-futures read resolved to
+        ``tradestation_cohort_1m`` and was silently governed by the equity
+        cohort's fold windows.
+        """
+        resolved = resolve_dataset("tradestation", symbol, asset_class="future")
+        assert resolved != "tradestation_cohort_1m"
+        assert resolved == "tradestation_crypto_futures"
+
+    def test_future_asset_class_wins_over_the_ladder_symbols(self) -> None:
+        """A declared futures read is a futures read whatever the ticker looks like."""
+        assert (
+            resolve_dataset("tradestation", "SPY", asset_class="future")
+            == "tradestation_crypto_futures"
+        )
+
+    @pytest.mark.parametrize("asset_class", [None, "equity", "option"])
+    def test_tradestation_non_future_asset_class_is_unchanged(
+        self, asset_class: str | None
+    ) -> None:
+        """Backward compatibility: every existing caller keeps its mapping."""
+        assert (
+            resolve_dataset("tradestation", "AAPL", asset_class=asset_class)
+            == "tradestation_cohort_1m"
+        )
+        assert (
+            resolve_dataset("tradestation", "SPY", asset_class=asset_class)
+            == "spy_qqq_ladder_tradestation"
+        )
+
+
+class TestTradeStationCryptoFutures:
+    """Crypto futures fold windows frozen by the basis-carry registration."""
+
+    def test_dataset_is_registered_with_frozen_windows(self) -> None:
+        windows = INTRADAY_CAMPAIGN_LEDGER_V1.datasets["tradestation_crypto_futures"]
+        assert windows.discovery == (date(2022, 1, 1), date(2024, 12, 31))
+        assert windows.validation == (date(2025, 1, 1), date(2025, 12, 31))
+        assert windows.lockbox_start == date(2026, 1, 1)
+
+    def test_discovery_read_in_window_allowed(self, tmp_path: Path) -> None:
+        guard = LockboxGuard(tmp_path / "usage.jsonl")
+        guard.assert_period_allowed(
+            "tradestation_crypto_futures",
+            date(2022, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="path_e_crypto_basis_carry",
+        )
+        assert (tmp_path / "usage.jsonl").exists()
+
+    def test_pre_inception_discovery_read_rejected(self, tmp_path: Path) -> None:
+        """2021 precedes the frozen 2022 discovery start (ragged @MET); the
+        tail is excluded, never backfilled (PD-6)."""
+        guard = LockboxGuard(tmp_path / "usage.jsonl")
+        with pytest.raises(LockboxViolationError):
+            guard.assert_period_allowed(
+                "tradestation_crypto_futures",
+                date(2021, 1, 1),
+                date(2021, 12, 31),
+                purpose="discovery",
+                arm_id="path_e_crypto_basis_carry",
+            )
+
+    @pytest.mark.parametrize("purpose", ["validation", "characterization"])
+    def test_out_of_window_purposes_rejected(self, tmp_path: Path, purpose: str) -> None:
+        guard = LockboxGuard(tmp_path / "usage.jsonl")
+        with pytest.raises(LockboxViolationError):
+            guard.assert_period_allowed(
+                "tradestation_crypto_futures",
+                date(2023, 1, 1),
+                date(2023, 12, 31),
+                purpose=purpose,
+                arm_id="path_e_crypto_basis_carry",
+            )
+
+    def test_dev_smoke_is_still_allowed(self, tmp_path: Path) -> None:
+        """The depth probe reads as dev_smoke; it must keep working."""
+        guard = LockboxGuard(tmp_path / "usage.jsonl")
+        guard.assert_period_allowed(
+            "tradestation_crypto_futures",
+            date(2021, 1, 1),
+            date(2024, 12, 31),
+            purpose="dev_smoke",
+            arm_id="path_e_crypto_basis",
+        )
+        assert (tmp_path / "usage.jsonl").exists()
 
 
 class TestDatabentoOptions:

@@ -182,13 +182,14 @@ class DataService:
         purpose: str | None,
         arm_id: str | None,
         final_portfolio_review: bool,
+        asset_class: str | None = None,
     ) -> None:
         """Route a declared-purpose read through the lockbox guard."""
         if purpose is None:
             return
         if not arm_id:
             raise ValueError("arm_id is required when a research purpose is declared")
-        dataset = resolve_dataset(provider, symbol)
+        dataset = resolve_dataset(provider, symbol, asset_class=asset_class)
         if dataset is None:
             return
         self.lockbox_guard.assert_period_allowed(
@@ -274,6 +275,7 @@ class DataService:
         purpose: str | None = None,
         arm_id: str | None = None,
         final_portfolio_review: bool = False,
+        asset_class: str | None = None,
     ) -> pl.DataFrame | Iterator[pl.DataFrame]:
         """Load data for a symbol from storage.
 
@@ -293,6 +295,10 @@ class DataService:
             arm_id: Research arm consuming the read (required with purpose)
             final_portfolio_review: Human-only flag permitting program-lockbox
                 reads; recorded in the usage log
+            asset_class: Optional asset class discriminating fold governance for
+                reads that share a provider (e.g. "future" routes TradeStation
+                ``@MBT``/``@MET`` to the crypto-futures ledger, not the equity
+                cohort). When omitted, the provider/symbol mapping applies.
 
         Returns:
             DataFrame with OHLCV data
@@ -314,6 +320,7 @@ class DataService:
             purpose=purpose,
             arm_id=arm_id,
             final_portfolio_review=final_portfolio_review,
+            asset_class=asset_class,
         )
         storage_key = self._storage_key(provider, symbol, timeframe)
         if self._store.exists(storage_key) and timeframe != "1m":

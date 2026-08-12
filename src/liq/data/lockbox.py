@@ -352,6 +352,28 @@ class LockboxGuard:
                 )
         self._session_validation_uses.add(key)
 
+    def guarded_windows(self, *, arm_id: str, dataset: str) -> list[tuple[str, str]]:
+        """Citable ``(start, end)`` windows logged for one arm and dataset.
+
+        Only research purposes are returned; ``dev_smoke`` is deliberately
+        excluded because it is never evidence. Requiring ``dataset`` prevents a
+        guarded read on one market from covering a provenance claim about
+        another.
+        """
+        windows: list[tuple[str, str]] = []
+        for entry in self._read_log():
+            if entry.get("arm_id") != arm_id:
+                continue
+            if entry.get("dataset") != dataset:
+                continue
+            if entry.get("purpose") not in RESEARCH_PURPOSES:
+                continue
+            start = entry.get("start")
+            end = entry.get("end")
+            if isinstance(start, str) and isinstance(end, str):
+                windows.append((start, end))
+        return windows
+
     def _read_log(self) -> list[dict]:
         if not self.usage_log_path.exists():
             return []

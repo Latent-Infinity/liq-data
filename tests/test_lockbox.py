@@ -755,3 +755,50 @@ class TestDataServiceIntegration:
                 purpose="validation",
                 arm_id="fce_timestamp_contract",
             )
+
+
+class TestGuardedWindows:
+    def test_returns_logged_windows_for_arm(self, guard: LockboxGuard) -> None:
+        guard.assert_period_allowed(
+            "coinbase_spot",
+            date(2020, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="arm_x",
+        )
+        assert guard.guarded_windows(arm_id="arm_x", dataset="coinbase_spot") == [
+            ("2020-01-01", "2024-12-31")
+        ]
+
+    def test_filters_by_arm_and_dataset(self, guard: LockboxGuard) -> None:
+        guard.assert_period_allowed(
+            "coinbase_spot",
+            date(2020, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="arm_x",
+        )
+        guard.assert_period_allowed(
+            "oanda_fx",
+            date(2020, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="arm_y",
+        )
+        assert guard.guarded_windows(arm_id="arm_x", dataset="oanda_fx") == []
+        assert guard.guarded_windows(arm_id="arm_y", dataset="oanda_fx") == [
+            ("2020-01-01", "2024-12-31")
+        ]
+
+    def test_empty_when_no_reads_logged(self, guard: LockboxGuard) -> None:
+        assert guard.guarded_windows(arm_id="nobody", dataset="coinbase_spot") == []
+
+    def test_dev_smoke_window_is_not_citable_coverage(self, guard: LockboxGuard) -> None:
+        guard.assert_period_allowed(
+            "coinbase_spot",
+            date(2026, 1, 1),
+            date(2026, 1, 2),
+            purpose="dev_smoke",
+            arm_id="arm_x",
+        )
+        assert guard.guarded_windows(arm_id="arm_x", dataset="coinbase_spot") == []

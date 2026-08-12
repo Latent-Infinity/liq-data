@@ -171,6 +171,36 @@ class TestResolveComposite:
         with pytest.raises(UniverseResolutionError, match="ConstituentSource"):
             UniverseResolver().resolve(d, date(2025, 1, 2))
 
+    def test_selects_constituent_source_by_declared_name(self) -> None:
+        d = UniverseDefinition(
+            name="sp500",
+            version=1,
+            kind=UniverseKind.COMPOSITE,
+            spec={"source": "snapshot", "id": "SP500"},
+        )
+        snapshot = InMemoryStubSource({"SP500": ["OLD", "NEW"]})
+        resolver = UniverseResolver(
+            constituent_sources={
+                "snapshot": snapshot,
+                "stub": InMemoryStubSource({"SP500": ["CURRENT"]}),
+            }
+        )
+        assert resolver.resolve(d, date(2025, 1, 2)).symbols == ["NEW", "OLD"]
+
+    def test_unknown_declared_source_does_not_fall_back_to_another_named_source(self) -> None:
+        d = UniverseDefinition(
+            name="sp500",
+            version=1,
+            kind=UniverseKind.COMPOSITE,
+            spec={"source": "unknown", "id": "SP500"},
+        )
+        resolver = UniverseResolver(
+            constituent_source=InMemoryStubSource({"SP500": ["LEGACY"]}),
+            constituent_sources={"stub": InMemoryStubSource({"SP500": ["CURRENT"]})},
+        )
+        with pytest.raises(UniverseResolutionError, match="unknown constituent source"):
+            resolver.resolve(d, date(2025, 1, 2))
+
 
 # ----- resolver: set_op -----------------------------------------------------
 

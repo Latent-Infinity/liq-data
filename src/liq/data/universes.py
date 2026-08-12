@@ -27,7 +27,7 @@ hand-edited.
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
@@ -175,11 +175,35 @@ class SnapshotConstituentSource:
 
     def __init__(self, constituent_id: str, snapshots: pl.DataFrame) -> None:
         self._id = constituent_id
+        missing = {"date", "tickers"} - set(snapshots.columns)
+        if missing:
+            raise UniverseResolutionError(
+                "membership snapshots require 'date' and 'tickers' columns; "
+                f"missing {sorted(missing)}"
+            )
+        if snapshots.schema["date"] != pl.Date:
+            raise UniverseResolutionError("membership snapshot date column must use Date dtype")
+        if snapshots.schema["tickers"] != pl.List(pl.String):
+            raise UniverseResolutionError(
+                "membership snapshot tickers column must use List(String) dtype"
+            )
+        if snapshots.is_empty():
+            raise UniverseResolutionError("membership snapshots must not be empty")
+        if snapshots["date"].null_count() or snapshots["tickers"].null_count():
+            raise UniverseResolutionError(
+                "membership snapshot dates and ticker lists cannot be null"
+            )
+        if snapshots["date"].n_unique() != snapshots.height:
+            raise UniverseResolutionError("membership snapshots contain duplicate dates")
         frame = snapshots.sort("date")
         self._dates: list[date] = frame["date"].to_list()
-        self._tickers: list[list[str]] = [
-            sorted({str(t).upper() for t in row}) for row in frame["tickers"].to_list()
-        ]
+        self._tickers = []
+        for row in frame["tickers"].to_list():
+            if any(t is None for t in row):
+                raise UniverseResolutionError(
+                    "membership snapshot ticker lists cannot contain null"
+                )
+            self._tickers.append(sorted({str(t).upper() for t in row}))
 
     @classmethod
     def from_parquet(cls, constituent_id: str, path: Path | str) -> SnapshotConstituentSource:
@@ -197,6 +221,46 @@ class SnapshotConstituentSource:
                 f"as_of {as_of} is before first snapshot {self._dates[0]}"
             )
         return list(self._tickers[position])
+
+
+class DirectorySnapshotSource:
+    """Point-in-time constituent source over per-id snapshot parquets.
+
+    Resolves each constituent ``id`` from ``{base_dir}/{id}.parquet`` (a
+    ``date`` / ``tickers`` full-composition snapshot table), lazily building
+    and caching a :class:`SnapshotConstituentSource` per id. ``pit=True``: a
+    requested id with no snapshot file is a fail-closed
+    :class:`UniverseResolutionError`, never a silent current-membership
+    fallback (which would reintroduce survivorship bias).
+    """
+
+    pit: bool = True
+
+    def __init__(self, base_dir: Path | str) -> None:
+        self._base_dir = Path(base_dir)
+        self._cache: dict[str, SnapshotConstituentSource] = {}
+
+    def _source_for(self, id: str) -> SnapshotConstituentSource:
+        cached = self._cache.get(id)
+        if cached is not None:
+            return cached
+        if not id or Path(id).name != id or id in {".", ".."}:
+            raise UniverseResolutionError(f"invalid constituent id {id!r}")
+        base = self._base_dir.resolve()
+        path = (base / f"{id}.parquet").resolve()
+        if not path.is_relative_to(base):
+            raise UniverseResolutionError(f"invalid constituent id {id!r}")
+        if not path.is_file():
+            raise UniverseResolutionError(
+                f"no point-in-time membership snapshot for constituent id {id!r} "
+                f"at {path}; refusing a silent current-membership fallback"
+            )
+        source = SnapshotConstituentSource.from_parquet(id, path)
+        self._cache[id] = source
+        return source
+
+    def members(self, *, id: str, as_of: date) -> Sequence[str]:
+        return self._source_for(id).members(id=id, as_of=as_of)
 
 
 @runtime_checkable
@@ -237,10 +301,12 @@ class UniverseResolver:
         self,
         *,
         constituent_source: ConstituentSource | None = None,
+        constituent_sources: Mapping[str, ConstituentSource] | None = None,
         reference_data: ReferenceData | None = None,
         named_universes: dict[str, UniverseDefinition] | None = None,
     ) -> None:
         self._constituent_source = constituent_source
+        self._constituent_sources = dict(constituent_sources or {})
         self._reference_data = reference_data
         self._named = dict(named_universes or {})
 
@@ -306,11 +372,21 @@ class UniverseResolver:
     def _resolve_composite(
         self, definition: UniverseDefinition, as_of: date
     ) -> tuple[list[str], bool]:
-        if self._constituent_source is None:
+        source_name = definition.spec["source"]
+        if self._constituent_sources:
+            source = self._constituent_sources.get(source_name)
+            if source is None:
+                raise UniverseResolutionError(
+                    f"unknown constituent source {source_name!r}; "
+                    f"configured sources are {sorted(self._constituent_sources)}"
+                )
+        else:
+            source = self._constituent_source
+        if source is None:
             raise UniverseResolutionError("composite universe requires a ConstituentSource")
         id_ = definition.spec["id"]
-        symbols = list(self._constituent_source.members(id=id_, as_of=as_of))
-        return symbols, bool(self._constituent_source.pit)
+        symbols = list(source.members(id=id_, as_of=as_of))
+        return symbols, bool(source.pit)
 
     def _resolve_set_op(
         self, definition: UniverseDefinition, as_of: date
@@ -433,6 +509,7 @@ class UniverseRegistry:
 
 __all__ = [
     "ConstituentSource",
+    "DirectorySnapshotSource",
     "InMemoryStubSource",
     "ReferenceData",
     "ResolvedUniverse",

@@ -824,6 +824,32 @@ class DataService:
 
     # ----- universe resolution / sync ----------------------------------
 
+    def _universe_resolver(self, named_universes: Any) -> Any:
+        """Resolver whose constituent source is point-in-time when snapshots exist.
+
+        ``source="snapshot"`` uses :class:`DirectorySnapshotSource`
+        (``pit=True``) rooted at
+        ``{data_root}/reference/universes/snapshots``. ``source="stub"`` is the
+        only route to :class:`InMemoryStubSource` (``pit=False``), which
+        downstream sweeps reject to avoid survivorship bias. A snapshot source
+        missing its directory or requested id file is a fail-closed error,
+        never a silent current-membership fallback.
+        """
+        from liq.data.universes import (
+            DirectorySnapshotSource,
+            InMemoryStubSource,
+            UniverseResolver,
+        )
+
+        snapshot_dir = self._data_root / "reference" / "universes" / "snapshots"
+        return UniverseResolver(
+            constituent_sources={
+                "snapshot": DirectorySnapshotSource(snapshot_dir),
+                "stub": InMemoryStubSource(),
+            },
+            named_universes=named_universes,
+        )
+
     def resolve_universe(
         self,
         universe_ref: Any,
@@ -845,11 +871,9 @@ class DataService:
         carries the constituent-source semantics.
         """
         from liq.data.universes import (
-            InMemoryStubSource,
             UniverseDefinition,
             UniverseKind,
             UniverseRegistry,
-            UniverseResolver,
         )
 
         if isinstance(universe_ref, UniverseDefinition):
@@ -873,10 +897,7 @@ class DataService:
         if isinstance(registry, UniverseRegistry):
             named_universes = {n: registry.load(n) for n in registry.list_names()}
 
-        return UniverseResolver(
-            constituent_source=InMemoryStubSource(),
-            named_universes=named_universes,
-        ).resolve(definition, as_of=as_of)
+        return self._universe_resolver(named_universes).resolve(definition, as_of=as_of)
 
     def estimate_databento_cost(
         self,
@@ -1029,10 +1050,8 @@ class DataService:
         """
         from liq.data.manifest import CoverageManifest, CoverageRange
         from liq.data.universes import (
-            InMemoryStubSource,
             UniverseDefinition,
             UniverseRegistry,
-            UniverseResolver,
         )
 
         if max_workers <= 0:
@@ -1049,10 +1068,7 @@ class DataService:
         if isinstance(registry, UniverseRegistry):
             named_universes = {name: registry.load(name) for name in registry.list_names()}
 
-        resolved = UniverseResolver(
-            constituent_source=InMemoryStubSource(),
-            named_universes=named_universes,
-        ).resolve(definition, as_of=as_of or end)
+        resolved = self._universe_resolver(named_universes).resolve(definition, as_of=as_of or end)
 
         sync_run_id = uuid.uuid4().hex
         log_base: dict[str, Any] = {
@@ -1321,10 +1337,8 @@ class DataService:
         """
         from liq.data.manifest import CoverageManifest, CoverageRange
         from liq.data.universes import (
-            InMemoryStubSource,
             UniverseDefinition,
             UniverseRegistry,
-            UniverseResolver,
         )
 
         if max_in_flight < 1:
@@ -1341,10 +1355,7 @@ class DataService:
         if isinstance(registry, UniverseRegistry):
             named_universes = {name: registry.load(name) for name in registry.list_names()}
 
-        resolved = UniverseResolver(
-            constituent_source=InMemoryStubSource(),
-            named_universes=named_universes,
-        ).resolve(definition, as_of=as_of or end)
+        resolved = self._universe_resolver(named_universes).resolve(definition, as_of=as_of or end)
 
         sync_run_id = uuid.uuid4().hex
         log_base: dict[str, Any] = {

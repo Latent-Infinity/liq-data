@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from liq.data.service import DataService
@@ -66,3 +67,75 @@ class TestResolveUniverse:
     def test_name_without_registry_raises(self, service: DataService) -> None:
         with pytest.raises(ValueError, match="UniverseRegistry"):
             service.resolve_universe("missing", as_of=date(2024, 6, 3))
+
+
+class TestResolveUniversePointInTime:
+    """Composite universes resolve point-in-time when membership snapshots exist."""
+
+    @staticmethod
+    def _composite() -> UniverseDefinition:
+        return UniverseDefinition(
+            name="idx",
+            version=1,
+            kind=UniverseKind.COMPOSITE,
+            spec={"source": "snapshot", "id": "sp500"},
+        )
+
+    @staticmethod
+    def _write_snapshot(data_root: Path) -> None:
+        snap_dir = data_root / "reference" / "universes" / "snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(
+            {
+                "date": [date(2005, 1, 3), date(2005, 3, 1)],
+                "tickers": [["AAA", "BBB", "CCC"], ["AAA", "EEE", "DDD"]],
+            }
+        ).write_parquet(snap_dir / "sp500.parquet")
+
+    def test_composite_is_point_in_time_when_snapshot_present(
+        self, service: DataService, tmp_path: Path
+    ) -> None:
+        self._write_snapshot(tmp_path)
+        resolved = service.resolve_universe(self._composite(), as_of=date(2005, 2, 1))
+        assert resolved.pit is True
+        assert resolved.symbols == ["AAA", "BBB", "CCC"]  # floor at 2005-01-03
+
+    def test_snapshot_source_without_snapshot_is_fail_closed(self, service: DataService) -> None:
+        from liq.data.universes import UniverseResolutionError
+
+        with pytest.raises(UniverseResolutionError, match="no point-in-time membership snapshot"):
+            service.resolve_universe(self._composite(), as_of=date(2005, 2, 1))
+
+    def test_explicit_stub_source_remains_current_only(self, service: DataService) -> None:
+        current_only = UniverseDefinition(
+            name="idx",
+            version=1,
+            kind=UniverseKind.COMPOSITE,
+            spec={"source": "stub", "id": "sp500"},
+        )
+        resolved = service.resolve_universe(current_only, as_of=date(2005, 2, 1))
+        assert resolved.pit is False
+        assert resolved.symbols == []
+
+    def test_stub_source_does_not_consume_snapshot_file(
+        self, service: DataService, tmp_path: Path
+    ) -> None:
+        self._write_snapshot(tmp_path)
+        current_only = UniverseDefinition(
+            name="idx",
+            version=1,
+            kind=UniverseKind.COMPOSITE,
+            spec={"source": "stub", "id": "sp500"},
+        )
+        resolved = service.resolve_universe(current_only, as_of=date(2005, 2, 1))
+        assert resolved.pit is False
+        assert resolved.symbols == []
+
+    def test_present_snapshot_dir_missing_id_is_fail_closed(
+        self, service: DataService, tmp_path: Path
+    ) -> None:
+        from liq.data.universes import UniverseResolutionError
+
+        (tmp_path / "reference" / "universes" / "snapshots").mkdir(parents=True)
+        with pytest.raises(UniverseResolutionError, match="no point-in-time membership snapshot"):
+            service.resolve_universe(self._composite(), as_of=date(2005, 2, 1))

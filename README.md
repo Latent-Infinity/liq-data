@@ -54,6 +54,19 @@ one validation-period use per dataset (`ValidationReuseError` on reuse);
 research evidence. Reads without a declared purpose are not checked or logged
 and can never be cited as research evidence.
 
+For final provenance reconciliation, query citable windows with both identity
+dimensions: `guard.guarded_windows(arm_id=arm_id, dataset=dataset)`. The result
+contains only research-purpose reads for that exact dataset; `dev_smoke` reads
+are deliberately excluded.
+
+### Point-in-time composite universes
+
+Composite universe definitions must name their constituent source. A declared
+`source: snapshot` resolves `{data_root}/reference/universes/snapshots/{id}.parquet`
+as full-composition `date` / `tickers` snapshots and fails closed if the file or
+schema is invalid. The current-membership-only, non-PIT source is available only
+through an explicit `source: stub` declaration; it is never an implicit fallback.
+
 ### SEC 8-K event metadata
 
 `SECEdgarProvider.fetch_8k_events` returns exact-token matches for registered

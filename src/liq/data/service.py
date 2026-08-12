@@ -455,6 +455,11 @@ class DataService:
         save: bool = True,
         mode: str = "append",
         dataset: str | None = None,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        final_portfolio_review: bool = False,
+        asset_class: str | None = None,
     ) -> pl.DataFrame:
         """Fetch data from provider.
 
@@ -470,6 +475,12 @@ class DataService:
                 securities reachable only on a specific venue dataset (e.g. a
                 delisted name on ``XNAS.ITCH``). Ignored by providers that do
                 not accept it.
+            purpose: Research purpose of the provider read. Declared research
+                fetches route through the same lockbox guard as stored reads.
+            arm_id: Research arm consuming the read (required with purpose).
+            final_portfolio_review: Human-only program-lockbox override.
+            asset_class: Optional fold discriminator, such as ``future`` for
+                TradeStation crypto futures.
 
         Returns:
             DataFrame with fetched OHLCV data
@@ -481,6 +492,17 @@ class DataService:
         """
         if end is None:
             end = date.today()
+
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
+            asset_class=asset_class,
+        )
 
         prov = self._get_provider(provider)
         extra = {"dataset": dataset} if dataset is not None else {}

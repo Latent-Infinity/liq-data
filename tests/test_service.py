@@ -359,6 +359,69 @@ class TestDataServiceFetch:
         assert isinstance(result, pl.DataFrame)
         assert not ds.store.exists("oanda/EUR_USD/1h")
 
+    def test_declared_research_fetch_routes_through_guard(self, tmp_path: Path) -> None:
+        """Provider reads need the same lockbox boundary as stored-data reads."""
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(ds, "_guard_research_read") as guard,
+            patch.object(ds, "_get_provider") as get_provider,
+        ):
+            get_provider.return_value.fetch_bars.return_value = pl.DataFrame(
+                {
+                    "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
+                    "open": [1.0],
+                    "high": [1.1],
+                    "low": [0.9],
+                    "close": [1.05],
+                    "volume": [100.0],
+                }
+            )
+            ds.fetch(
+                "tradestation",
+                "@MBT",
+                date(2024, 1, 15),
+                date(2024, 1, 15),
+                "1d",
+                save=False,
+                purpose="dev_smoke",
+                arm_id="path_e_crypto_basis_carry",
+                asset_class="future",
+            )
+
+        guard.assert_called_once_with(
+            "tradestation",
+            "@MBT",
+            date(2024, 1, 15),
+            date(2024, 1, 15),
+            purpose="dev_smoke",
+            arm_id="path_e_crypto_basis_carry",
+            final_portfolio_review=False,
+            asset_class="future",
+        )
+
+    def test_guard_rejects_fetch_before_provider_call(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(ds, "_guard_research_read", side_effect=LockboxViolationError("blocked")),
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="blocked"),
+        ):
+            ds.fetch(
+                "tradestation",
+                "@MBT",
+                date(2026, 1, 1),
+                date(2026, 1, 2),
+                "1d",
+                save=False,
+                purpose="discovery",
+                arm_id="path_e_crypto_basis_carry",
+                asset_class="future",
+            )
+
+        get_provider.assert_not_called()
+
 
 class TestDataServiceValidate:
     """Tests for DataService.validate() method."""

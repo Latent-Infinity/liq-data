@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from liq.data.providers.binance import BinanceProvider
     from liq.data.providers.coinbase import CoinbaseProvider
     from liq.data.providers.databento import DatabentoProvider
+    from liq.data.providers.finra_short_interest import FINRAShortInterestProvider
     from liq.data.providers.fred import FREDProvider
     from liq.data.providers.oanda import OandaProvider
     from liq.data.providers.polygon import PolygonProvider
@@ -94,6 +95,12 @@ class LiqDataSettings(BaseSettings):
     sec_edgar_user_agent: str | None = Field(
         default=None,
         description="Contact User-Agent for SEC EDGAR requests, e.g. 'name email@example.com'",
+    )
+
+    # FINRA short interest settings (free CDN; fair-use etiquette wants a contact User-Agent)
+    finra_short_interest_user_agent: str | None = Field(
+        default=None,
+        description="Contact User-Agent for FINRA short-interest requests, e.g. 'name email@example.com'",
     )
 
     # OANDA settings
@@ -445,6 +452,29 @@ def create_sec_edgar_provider(settings: LiqDataSettings | None = None) -> "SECEd
         )
 
     return SECEdgarProvider(user_agent=settings.sec_edgar_user_agent)
+
+
+def create_finra_short_interest_provider(
+    settings: LiqDataSettings | None = None,
+) -> "FINRAShortInterestProvider":
+    """Create a FINRA short-interest provider from settings.
+
+    Raises:
+        ValueError: If FINRA_SHORT_INTEREST_USER_AGENT is not configured.
+    """
+    from liq.data.providers.finra_short_interest import FINRAShortInterestProvider
+
+    if settings is None:
+        settings = get_settings()
+
+    if not settings.finra_short_interest_user_agent:
+        raise ValueError(
+            "FINRA_SHORT_INTEREST_USER_AGENT not configured. FINRA fair-use etiquette wants a "
+            "contact User-Agent, e.g. 'name email@example.com'. Set it in .env or as an "
+            "environment variable."
+        )
+
+    return FINRAShortInterestProvider(user_agent=settings.finra_short_interest_user_agent)
 
 
 def create_databento_provider(

@@ -154,8 +154,36 @@ def parse_wikipedia_sectors(wikitext: str) -> dict[str, str]:
     return sectors
 
 
+_RANKING_KEYWORDS = ("market cap", "market capitalization", "ranking")
+_MA_KEYWORDS = ("acqui", "merg", "bought", "takeover")
+_DELIST_KEYWORDS = ("delist", "bankrupt", "chapter 11")
+_SPINOFF_KEYWORDS = ("spun off", "spin-off", "spinoff", "spun out")
+
+
+def classify_removal_reason(reason: str) -> str:
+    """Deterministic taxonomy label for a change ``reason`` text.
+
+    Returns one of ``"ranking"``, ``"m_and_a"``, ``"delisting"``, ``"spinoff"``,
+    or ``"other"`` (unclassifiable). Only ``"ranking"`` is a clean index-flow
+    removal; the rest carry their own corporate-action dynamics and are excluded
+    from the clean-deletes stratum. Fixed, case-insensitive keyword rules with a
+    fixed priority.
+    """
+    text = reason.casefold()
+    if any(k in text for k in _MA_KEYWORDS):
+        return "m_and_a"
+    if any(k in text for k in _DELIST_KEYWORDS):
+        return "delisting"
+    if any(k in text for k in _SPINOFF_KEYWORDS):
+        return "spinoff"
+    if any(k in text for k in _RANKING_KEYWORDS):
+        return "ranking"
+    return "other"
+
+
 def parse_wikipedia_changes(wikitext: str) -> pl.DataFrame:
-    """Parse the ``id="changes"`` table into ``date / symbol / action`` rows.
+    """Parse the ``id="changes"`` table into ``date / symbol / action / reason /
+    reason_class`` rows.
 
     Handles both single-line (``|date || T || [[name]] || ...``) and
     multi-line (one leading-pipe cell per line) row styles; refs, templates,
@@ -183,13 +211,29 @@ def parse_wikipedia_changes(wikitext: str) -> pl.DataFrame:
             effective = datetime.strptime(cells[0], "%B %d, %Y").date()
         except ValueError:
             continue  # header or malformed row
+        reason = cells[5].strip() if len(cells) > 5 else ""
+        reason_class = classify_removal_reason(reason)
         for index, action in ((1, "added"), (3, "removed")):
             if index < len(cells) and _TICKER.match(cells[index]):
-                entries.append({"date": effective, "symbol": cells[index], "action": action})
+                entries.append(
+                    {
+                        "date": effective,
+                        "symbol": cells[index],
+                        "action": action,
+                        "reason": reason,
+                        "reason_class": reason_class,
+                    }
+                )
 
     return pl.DataFrame(
         entries,
-        schema={"date": pl.Date, "symbol": pl.String, "action": pl.String},
+        schema={
+            "date": pl.Date,
+            "symbol": pl.String,
+            "action": pl.String,
+            "reason": pl.String,
+            "reason_class": pl.String,
+        },
     )
 
 

@@ -22,6 +22,7 @@ from liq.data.providers.sp500_membership import (
     SP500MembershipProvider,
     annotate_deltas_with_wikipedia_cross_check,
     build_membership_deltas,
+    classify_removal_reason,
     cross_check_deltas,
     parse_wikipedia_changes,
     parse_wikipedia_sectors,
@@ -131,6 +132,23 @@ class TestWikipediaParser:
         assert (date(2026, 5, 7), "CTRA", "removed") in rows
         # Header rows and empty cells never produce entries.
         assert all(r["symbol"].isupper() for r in changes.rows(named=True))
+        # Removal reasons are retained and classified deterministically.
+        by_symbol = {r["symbol"]: r["reason_class"] for r in changes.rows(named=True)}
+        assert by_symbol["CAG"] == "ranking"
+        assert by_symbol["POOL"] == "ranking"
+        assert by_symbol["CTRA"] == "m_and_a"
+
+    def test_classify_removal_reason_taxonomy(self) -> None:
+        assert classify_removal_reason("Market capitalization change.") == "ranking"
+        assert classify_removal_reason("Acme acquired Target Inc.") == "m_and_a"
+        assert classify_removal_reason("Company delisted from NYSE.") == "delisting"
+        assert classify_removal_reason("Parent spun off Newco.") == "spinoff"
+        assert classify_removal_reason("") == "other"
+        assert classify_removal_reason("Reorganization for reasons") == "other"
+
+    def test_corporate_action_takes_priority_over_ranking_text(self) -> None:
+        reason = "Target was acquired after falling below the market-cap ranking."
+        assert classify_removal_reason(reason) == "m_and_a"
 
     @respx.mock
     def test_fetch_wikipedia_changes(self) -> None:

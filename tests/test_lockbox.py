@@ -35,6 +35,7 @@ class TestLedger:
     def test_ledger_contains_all_campaign_datasets(self) -> None:
         expected = {
             "spy_qqq_ladder_tradestation",
+            "month_end_spy_agg",
             "tradestation_cohort_1m",
             "oanda_fx",
             "binance_spot",
@@ -53,6 +54,41 @@ class TestLedger:
 
     def test_ledger_has_version(self) -> None:
         assert INTRADAY_CAMPAIGN_LEDGER_V1.version
+
+
+class TestMonthEndDataset:
+    def test_month_end_book_routes_spy_and_agg(self) -> None:
+        assert (
+            resolve_dataset("tradestation", "SPY", asset_class="month_end_book")
+            == "month_end_spy_agg"
+        )
+        assert (
+            resolve_dataset("tradestation", "AGG", asset_class="month_end_book")
+            == "month_end_spy_agg"
+        )
+
+    def test_agg_without_hint_falls_to_cohort(self) -> None:
+        assert resolve_dataset("tradestation", "AGG") == "tradestation_cohort_1m"
+
+    def test_month_end_discovery_2017_allowed(self, guard: LockboxGuard) -> None:
+        guard.assert_period_allowed(
+            "month_end_spy_agg",
+            date(2017, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="month_end_rebalance",
+        )
+
+    def test_cohort_rejects_2017_discovery(self, guard: LockboxGuard) -> None:
+        # Without the dedicated dataset, AGG's cohort window (2019+) rejects 2017.
+        with pytest.raises(LockboxViolationError):
+            guard.assert_period_allowed(
+                "tradestation_cohort_1m",
+                date(2017, 1, 1),
+                date(2018, 12, 31),
+                purpose="discovery",
+                arm_id="month_end_rebalance",
+            )
 
 
 class TestFceLedger:

@@ -90,6 +90,13 @@ INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
                 validation=(date(2025, 1, 1), date(2025, 12, 31)),
                 lockbox_start=date(2026, 1, 1),
             ),
+            # Month-end SPY/AGG allocation book, fold-governed independently from
+            # the SPY/QQQ ladder (AGG daily history begins 2017 on TradeStation).
+            "month_end_spy_agg": FoldWindows(
+                discovery=(date(2017, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
+                lockbox_start=date(2026, 1, 1),
+            ),
             "tradestation_cohort_1m": FoldWindows(
                 discovery=(date(2019, 1, 1), date(2024, 12, 31)),
                 validation=(date(2025, 1, 1), date(2025, 12, 31)),
@@ -153,6 +160,7 @@ FCE_LOCKBOX_LEDGER_V1 = LockboxLedger(
 )
 
 _LADDER_SYMBOLS = frozenset({"SPY", "QQQ"})
+_MONTH_END_SYMBOLS = frozenset({"SPY", "AGG"})
 _CRYPTO_FUTURES_CONTINUOUS_SYMBOLS = frozenset({"@MBT", "@MET"})
 
 USAGE_LOG_FILENAME = "lockbox_usage_log.jsonl"
@@ -177,6 +185,8 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
     if provider == "tradestation":
         if asset_class == "future" or symbol.upper() in _CRYPTO_FUTURES_CONTINUOUS_SYMBOLS:
             return "tradestation_crypto_futures"
+        if asset_class == "month_end_book" and symbol.upper() in _MONTH_END_SYMBOLS:
+            return "month_end_spy_agg"
         if symbol.upper() in _LADDER_SYMBOLS:
             return "spy_qqq_ladder_tradestation"
         return "tradestation_cohort_1m"

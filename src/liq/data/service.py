@@ -242,6 +242,7 @@ class DataService:
         purpose: str | None = ...,
         arm_id: str | None = ...,
         final_portfolio_review: bool = ...,
+        asset_class: str | None = ...,
     ) -> pl.DataFrame: ...
 
     @overload
@@ -259,6 +260,7 @@ class DataService:
         purpose: str | None = ...,
         arm_id: str | None = ...,
         final_portfolio_review: bool = ...,
+        asset_class: str | None = ...,
     ) -> pl.DataFrame | Iterator[pl.DataFrame]: ...
 
     def load(

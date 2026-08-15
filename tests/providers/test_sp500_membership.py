@@ -34,7 +34,10 @@ _SNAPSHOT_CSV = (
     'date,tickers\n2005-01-03,"AAA,BBB,CCC"\n2005-02-01,"AAA,BBB,DDD"\n2005-03-01,"AAA,BBB,DDD"\n'
 )
 
-# Verbatim excerpt of the live "Selected changes" wikitext, 2026-07-02.
+# Verbatim excerpt of the live "Selected changes" wikitext, retrieved
+# 2026-07-02 from "List of S&P 500 companies". Wikipedia later moved the
+# table — markup unchanged — to "Historical components of the S&P 500"
+# (live fetch verified 2026-08-15), so this excerpt still pins the format.
 _WIKI_EXCERPT = """{|  class="wikitable sortable" id="changes"
 |-
 ! data-sort-type="date" rowspan="2" | Effective Date
@@ -153,10 +156,31 @@ class TestWikipediaParser:
     @respx.mock
     def test_fetch_wikipedia_changes(self) -> None:
         payload = {"parse": {"wikitext": _WIKI_EXCERPT}}
-        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=payload))
+        respx.get(WIKIPEDIA_API_URL, params={"page": "Historical components of the S&P 500"}).mock(
+            return_value=httpx.Response(200, json=payload)
+        )
         provider = SP500MembershipProvider(user_agent=_UA)
         df = provider.fetch_wikipedia_changes()
         assert df.height == 6
+
+    @respx.mock
+    def test_fetch_wikipedia_changes_survives_table_move_off_constituents_page(self) -> None:
+        """The changes table left "List of S&P 500 companies" (live drift, 2026-08).
+
+        The constituents page now serves only the constituents table; fetching
+        it for changes fails with ``wikitext has no changes table``. The
+        provider must request "Historical components of the S&P 500" instead.
+        """
+        respx.get(WIKIPEDIA_API_URL, params={"page": "List of S&P 500 companies"}).mock(
+            return_value=httpx.Response(200, json={"parse": {"wikitext": _CONSTITUENTS_EXCERPT}})
+        )
+        respx.get(WIKIPEDIA_API_URL, params={"page": "Historical components of the S&P 500"}).mock(
+            return_value=httpx.Response(200, json={"parse": {"wikitext": _WIKI_EXCERPT}})
+        )
+        provider = SP500MembershipProvider(user_agent=_UA)
+        df = provider.fetch_wikipedia_changes()
+        assert df.height == 6
+        assert set(df["symbol"].to_list()) == {"CAG", "HONA", "MRVL", "POOL", "VEEV", "CTRA"}
 
 
 class TestCrossCheck:
@@ -274,7 +298,10 @@ class TestSectorParser:
 
     @respx.mock
     def test_fetch_wikipedia_sectors(self) -> None:
+        # Constituents (and their sectors) still live on the original page.
         payload = {"parse": {"wikitext": _CONSTITUENTS_EXCERPT}}
-        respx.get(WIKIPEDIA_API_URL).mock(return_value=httpx.Response(200, json=payload))
+        respx.get(WIKIPEDIA_API_URL, params={"page": "List of S&P 500 companies"}).mock(
+            return_value=httpx.Response(200, json=payload)
+        )
         provider = SP500MembershipProvider(user_agent=_UA)
         assert provider.fetch_wikipedia_sectors()["MMM"] == "Industrials"

@@ -6,8 +6,9 @@ Two independent public sources back point-in-time membership work:
   (``date,tickers`` CSV of full index composition since 1996), fetched from
   GitHub raw. Consecutive snapshots diff into membership deltas.
 * **Cross-check** — Wikipedia's "Selected changes" table on the
-  *List of S&P 500 companies* page, fetched as wikitext through the MediaWiki
-  API and parsed without HTML dependencies.
+  *Historical components of the S&P 500* page (moved there from *List of
+  S&P 500 companies*, which still hosts the constituents table), fetched as
+  wikitext through the MediaWiki API and parsed without HTML dependencies.
 
 This is a reference/event adapter in the same standalone category as
 ``SECEdgarProvider`` — it does not implement the OHLCV ``BaseProvider``
@@ -36,7 +37,10 @@ SNAPSHOT_CSV_URL = (
 # (e.g. Lehman 2008 appears as LEHMQ, Priceline 2009 as BKNG), so
 # contemporaneous-ticker sources will disagree on renames/class changes.
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
-_WIKIPEDIA_PAGE = "List of S&P 500 companies"
+# The two tables live on different pages: Wikipedia moved the "Selected
+# changes" table off the constituents page onto the historical-components page.
+_WIKIPEDIA_CHANGES_PAGE = "Historical components of the S&P 500"
+_WIKIPEDIA_CONSTITUENTS_PAGE = "List of S&P 500 companies"
 
 _TICKER = re.compile(r"^[A-Z][A-Z0-9.\-]{0,6}$")
 # [[target|display]] → display; [[target]] → target
@@ -87,12 +91,16 @@ class SP500MembershipProvider:
         ).sort("date")
 
     def fetch_wikipedia_changes(self) -> pl.DataFrame:
-        """Long-form change entries parsed from the live changes table."""
+        """Long-form change entries parsed from the live changes table.
+
+        The table lives on the *Historical components of the S&P 500* page
+        (not the constituents page, which no longer carries it).
+        """
         response = self._get_client().get(
             WIKIPEDIA_API_URL,
             params={
                 "action": "parse",
-                "page": _WIKIPEDIA_PAGE,
+                "page": _WIKIPEDIA_CHANGES_PAGE,
                 "prop": "wikitext",
                 "format": "json",
                 "formatversion": "2",
@@ -103,12 +111,15 @@ class SP500MembershipProvider:
         return parse_wikipedia_changes(wikitext)
 
     def fetch_wikipedia_sectors(self) -> dict[str, str]:
-        """Current ``symbol -> GICS sector`` map from the constituents table."""
+        """Current ``symbol -> GICS sector`` map from the constituents table.
+
+        The table lives on the *List of S&P 500 companies* page.
+        """
         response = self._get_client().get(
             WIKIPEDIA_API_URL,
             params={
                 "action": "parse",
-                "page": _WIKIPEDIA_PAGE,
+                "page": _WIKIPEDIA_CONSTITUENTS_PAGE,
                 "prop": "wikitext",
                 "format": "json",
                 "formatversion": "2",

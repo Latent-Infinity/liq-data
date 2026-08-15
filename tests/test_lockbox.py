@@ -889,3 +889,21 @@ class TestGuardedWindows:
             arm_id="arm_x",
         )
         assert guard.guarded_windows(arm_id="arm_x", dataset="coinbase_spot") == []
+
+    def test_current_session_only_excludes_prior_runs(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "lockbox_usage_log.jsonl"
+        first = LockboxGuard(usage_log_path=log_path)
+        second = LockboxGuard(usage_log_path=log_path)
+        for guard in (first, second):
+            guard.assert_period_allowed(
+                "coinbase_spot",
+                date(2020, 1, 1),
+                date(2024, 12, 31),
+                purpose="discovery",
+                arm_id="arm_x",
+            )
+
+        assert len(second.guarded_windows(arm_id="arm_x", dataset="coinbase_spot")) == 2
+        assert second.guarded_windows(
+            arm_id="arm_x", dataset="coinbase_spot", current_session_only=True
+        ) == [("2020-01-01", "2024-12-31")]

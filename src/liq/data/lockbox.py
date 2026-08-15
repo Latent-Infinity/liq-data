@@ -372,7 +372,13 @@ class LockboxGuard:
                 )
         self._session_validation_uses.add(key)
 
-    def guarded_windows(self, *, arm_id: str, dataset: str) -> list[tuple[str, str]]:
+    def guarded_windows(
+        self,
+        *,
+        arm_id: str,
+        dataset: str,
+        current_session_only: bool = False,
+    ) -> list[tuple[str, str]]:
         """Citable ``(start, end)`` windows logged for one arm and dataset.
 
         Only research purposes are returned; ``dev_smoke`` is deliberately
@@ -385,6 +391,8 @@ class LockboxGuard:
             if entry.get("arm_id") != arm_id:
                 continue
             if entry.get("dataset") != dataset:
+                continue
+            if current_session_only and entry.get("session_id") != self._session_id:
                 continue
             if entry.get("purpose") not in RESEARCH_PURPOSES:
                 continue

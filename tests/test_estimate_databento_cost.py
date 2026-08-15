@@ -31,6 +31,7 @@ class _RecordingMetadata:
         self._billable_bytes = billable_bytes
         self.get_cost_calls: list[dict[str, Any]] = []
         self.get_billable_size_calls: list[dict[str, Any]] = []
+        self.get_dataset_range_calls: list[dict[str, Any]] = []
 
     def get_cost(self, **kwargs: Any) -> float:
         self.get_cost_calls.append(dict(kwargs))
@@ -39,6 +40,19 @@ class _RecordingMetadata:
     def get_billable_size(self, **kwargs: Any) -> int:
         self.get_billable_size_calls.append(dict(kwargs))
         return self._billable_bytes
+
+    def get_dataset_range(self, **kwargs: Any) -> dict[str, Any]:
+        self.get_dataset_range_calls.append(dict(kwargs))
+        return {
+            "start": "2018-05-01T00:00:00.000000000Z",
+            "end": "2026-08-15T00:00:00.000000000Z",
+            "schema": {
+                "ohlcv-1d": {
+                    "start": "2018-05-01T00:00:00.000000000Z",
+                    "end": "2026-08-15T00:00:00.000000000Z",
+                }
+            },
+        }
 
 
 class _FakeHistorical:
@@ -148,6 +162,24 @@ class TestEstimateDatabentoCostHappyPath:
             dataset="EQUS.MINI",
         )
         assert result["schema"] == "ohlcv-1m"
+
+    def test_supports_daily_schema(
+        self,
+        service_with_api_key: DataService,
+        aichip_universe: UniverseDefinition,
+        fake_databento_module: Any,
+    ) -> None:
+        result = service_with_api_key.estimate_databento_cost(
+            aichip_universe,
+            start=date(2021, 1, 4),
+            end=date(2021, 1, 8),
+            timeframe="1d",
+            dataset="EQUS.MINI",
+        )
+        assert result["schema"] == "ohlcv-1d"
+        metadata = _FakeHistorical.metadata_instance
+        assert metadata is not None
+        assert metadata.get_cost_calls[0]["schema"] == "ohlcv-1d"
 
     def test_calls_metadata_get_cost_with_derived_schema(
         self,
@@ -298,15 +330,15 @@ class TestEstimateDatabentoCostHappyPath:
 class TestEstimateDatabentoCostRejection:
     """Rejection paths for invalid inputs."""
 
-    @pytest.mark.parametrize("bad_timeframe", ["5m", "1h", "1d", "30s", ""])
-    def test_rejects_non_1m_timeframe(
+    @pytest.mark.parametrize("bad_timeframe", ["5m", "1h", "30s", ""])
+    def test_rejects_unsupported_timeframe(
         self,
         service_with_api_key: DataService,
         aichip_universe: UniverseDefinition,
         fake_databento_module: Any,
         bad_timeframe: str,
     ) -> None:
-        """v0.2.6 contract: only timeframe='1m' is supported."""
+        """Only schemas explicitly supported by the provider are admitted."""
         with pytest.raises(ValueError, match="timeframe"):
             service_with_api_key.estimate_databento_cost(
                 aichip_universe,
@@ -406,3 +438,22 @@ class TestEstimateDatabentoCostUniverseShapes:
             dataset="EQUS.MINI",
         )
         assert sorted(result["symbols"]) == ["AAPL", "NVDA"]
+
+
+class TestDatabentoDatasetRange:
+    def test_returns_non_billable_metadata_payload(
+        self,
+        service_with_api_key: DataService,
+        fake_databento_module: Any,
+    ) -> None:
+        result = service_with_api_key.get_databento_dataset_range(dataset="EQUS.MINI")
+        assert result["schema"]["ohlcv-1d"]["start"].startswith("2018-05-01")
+        metadata = _FakeHistorical.metadata_instance
+        assert metadata is not None
+        assert metadata.get_dataset_range_calls == [{"dataset": "EQUS.MINI"}]
+
+    def test_rejects_missing_api_key(self, tmp_path: Path, fake_databento_module: Any) -> None:
+        settings = LiqDataSettings(databento_api_key=None, data_root=tmp_path)
+        service = DataService(settings=settings, data_root=tmp_path)
+        with pytest.raises(ValueError, match="DATABENTO_API_KEY"):
+            service.get_databento_dataset_range(dataset="EQUS.MINI")

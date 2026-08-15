@@ -51,6 +51,7 @@ from liq.data.gaps import detect_gaps
 from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, LockboxLedger, resolve_dataset
 from liq.data.policies import POLICIES
 from liq.data.protocols import BatchJob, BatchMarketDataProvider
+from liq.data.providers.databento import SCHEMA_BY_TIMEFRAME
 from liq.data.qa import validate_ohlc
 from liq.data.rate_limiter import RateLimiter
 from liq.data.settings import (
@@ -916,8 +917,8 @@ class DataService:
         Wraps Databento's non-billable metadata endpoints
         (``metadata.get_cost`` and ``metadata.get_billable_size``) so a
         caller can confirm an operator-authorised cost bound *before*
-        invoking the billable :meth:`sync`. Currently only
-        ``timeframe="1m"`` is supported (derives ``schema="ohlcv-1m"``).
+        invoking the billable :meth:`sync`. Supported timeframes are derived
+        from the Databento provider's schema registry.
 
         Returns a dict with keys:
             billable_bytes, estimated_cost_usd, dataset, schema,
@@ -926,19 +927,14 @@ class DataService:
         Raises ``ValueError`` on bad timeframe, empty universe, inverted
         date range, or missing ``DATABENTO_API_KEY``.
         """
-        if timeframe != "1m":
+        schema = SCHEMA_BY_TIMEFRAME.get(timeframe)
+        if schema is None:
             raise ValueError(
-                f"estimate_databento_cost only supports timeframe='1m' "
-                f"(got {timeframe!r}); higher timeframes are not yet wired."
+                "estimate_databento_cost supports timeframes "
+                f"{sorted(SCHEMA_BY_TIMEFRAME)} (got {timeframe!r})"
             )
         if end < start:
             raise ValueError(f"end ({end}) must be on or after start ({start})")
-        if not self._settings.databento_api_key:
-            raise ValueError(
-                "DATABENTO_API_KEY not configured. Set it in .env or pass "
-                "settings with `databento_api_key=...`."
-            )
-
         resolved = self.resolve_universe(universe, as_of=end, registry=registry)
         symbols = list(resolved.symbols)
         if not symbols:
@@ -947,12 +943,7 @@ class DataService:
                 "after universe resolution"
             )
 
-        schema = "ohlcv-1m"
-
-        # Lazy import keeps the databento dep cost off the hot path.
-        import databento  # noqa: PLC0415
-
-        client = databento.Historical(key=self._settings.databento_api_key)
+        client = self._databento_historical_client()
         cost_usd = float(
             client.metadata.get_cost(
                 dataset=dataset,
@@ -998,6 +989,25 @@ class DataService:
             "end": end,
             "provider_request_id": request_id,
         }
+
+    def get_databento_dataset_range(self, *, dataset: str) -> dict[str, Any]:
+        """Return Databento's non-billable dataset-range metadata payload."""
+        if not dataset.strip():
+            raise ValueError("dataset must be a non-empty string")
+        payload = self._databento_historical_client().metadata.get_dataset_range(dataset=dataset)
+        return dict(payload)
+
+    def _databento_historical_client(self) -> Any:
+        """Build a metadata-capable client without touching billable endpoints."""
+        if not self._settings.databento_api_key:
+            raise ValueError(
+                "DATABENTO_API_KEY not configured. Set it in .env or pass "
+                "settings with `databento_api_key=...`."
+            )
+        # Lazy import keeps the databento dependency off the hot path.
+        import databento  # noqa: PLC0415
+
+        return databento.Historical(key=self._settings.databento_api_key)
 
     def sync(
         self,

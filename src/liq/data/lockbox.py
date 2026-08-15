@@ -97,6 +97,14 @@ INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
                 validation=(date(2025, 1, 1), date(2025, 12, 31)),
                 lockbox_start=date(2026, 1, 1),
             ),
+            # S&P 500 index-reconstitution event book, fold-governed
+            # independently from the minute cohort (TradeStation daily-bar
+            # depth begins 2017).
+            "index_recon_sp500": FoldWindows(
+                discovery=(date(2017, 1, 1), date(2024, 12, 31)),
+                validation=(date(2025, 1, 1), date(2025, 12, 31)),
+                lockbox_start=date(2026, 1, 1),
+            ),
             "tradestation_cohort_1m": FoldWindows(
                 discovery=(date(2019, 1, 1), date(2024, 12, 31)),
                 validation=(date(2025, 1, 1), date(2025, 12, 31)),
@@ -187,6 +195,8 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
             return "tradestation_crypto_futures"
         if asset_class == "month_end_book" and symbol.upper() in _MONTH_END_SYMBOLS:
             return "month_end_spy_agg"
+        if asset_class == "index_recon_book":
+            return "index_recon_sp500"
         if symbol.upper() in _LADDER_SYMBOLS:
             return "spy_qqq_ladder_tradestation"
         return "tradestation_cohort_1m"

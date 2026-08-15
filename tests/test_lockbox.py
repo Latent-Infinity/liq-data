@@ -36,6 +36,7 @@ class TestLedger:
         expected = {
             "spy_qqq_ladder_tradestation",
             "month_end_spy_agg",
+            "index_recon_sp500",
             "tradestation_cohort_1m",
             "oanda_fx",
             "binance_spot",
@@ -88,6 +89,56 @@ class TestMonthEndDataset:
                 date(2018, 12, 31),
                 purpose="discovery",
                 arm_id="month_end_rebalance",
+            )
+
+
+class TestIndexReconDataset:
+    def test_index_recon_book_routes_any_symbol(self) -> None:
+        assert (
+            resolve_dataset("tradestation", "SPY", asset_class="index_recon_book")
+            == "index_recon_sp500"
+        )
+        assert (
+            resolve_dataset("tradestation", "AAPL", asset_class="index_recon_book")
+            == "index_recon_sp500"
+        )
+
+    def test_symbol_without_hint_falls_to_cohort(self) -> None:
+        assert resolve_dataset("tradestation", "AAPL") == "tradestation_cohort_1m"
+
+    def test_index_recon_folds(self) -> None:
+        windows = INTRADAY_CAMPAIGN_LEDGER_V1.datasets["index_recon_sp500"]
+        assert windows.discovery == (date(2017, 1, 1), date(2024, 12, 31))
+        assert windows.validation == (date(2025, 1, 1), date(2025, 12, 31))
+        assert windows.lockbox_start == date(2026, 1, 1)
+
+    def test_index_recon_discovery_2017_allowed(self, guard: LockboxGuard) -> None:
+        guard.assert_period_allowed(
+            "index_recon_sp500",
+            date(2017, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="index_reconstitution",
+        )
+
+    def test_index_recon_discovery_before_2017_rejected(self, guard: LockboxGuard) -> None:
+        with pytest.raises(LockboxViolationError):
+            guard.assert_period_allowed(
+                "index_recon_sp500",
+                date(2016, 1, 1),
+                date(2016, 12, 31),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+            )
+
+    def test_index_recon_lockbox_read_rejected(self, guard: LockboxGuard) -> None:
+        with pytest.raises(LockboxViolationError, match="program lockbox"):
+            guard.assert_period_allowed(
+                "index_recon_sp500",
+                date(2025, 1, 1),
+                date(2026, 1, 1),
+                purpose="validation",
+                arm_id="index_reconstitution",
             )
 
 

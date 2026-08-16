@@ -184,7 +184,10 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
     crypto-futures dataset for the same reason. The unambiguous continuous
     symbols ``@MBT`` and ``@MET`` also route there when the hint is omitted;
     bare ``MET`` remains an equity unless explicitly declared as a future.
-    Any other asset class keeps the equity-bars mapping.
+    An ``"index_recon_book"`` read resolves to the index-reconstitution
+    dataset from either daily-bar provider (TradeStation or Databento) so
+    both sources share its fold governance. Any other asset class keeps the
+    equity-bars mapping.
 
     Returns ``None`` for providers outside the campaign ledger (their reads
     are not fold-governed).
@@ -209,6 +212,8 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
     if provider == "databento":
         if asset_class == "option":
             return "databento_opra_options"
+        if asset_class == "index_recon_book":
+            return "index_recon_sp500"
         return "databento_extended_hours"
     return None
 

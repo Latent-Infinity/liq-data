@@ -46,7 +46,7 @@ import polars as pl
 from filelock import FileLock, Timeout
 
 from liq.data.aggregation import aggregate_bars
-from liq.data.exceptions import ProviderNoDataError
+from liq.data.exceptions import LockboxViolationError, ProviderNoDataError
 from liq.data.gaps import detect_gaps
 from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, LockboxLedger, resolve_dataset
 from liq.data.policies import POLICIES
@@ -184,10 +184,15 @@ class DataService:
         arm_id: str | None,
         final_portfolio_review: bool,
         asset_class: str | None = None,
+        timeframe: str | None = None,
     ) -> None:
         """Route a declared-purpose read through the lockbox guard."""
         if purpose is None:
             return
+        if asset_class == "index_recon_book" and timeframe != "1d":
+            raise LockboxViolationError(
+                "index_recon_book research reads admit daily bars only (timeframe='1d')"
+            )
         if not arm_id:
             raise ValueError("arm_id is required when a research purpose is declared")
         dataset = resolve_dataset(provider, symbol, asset_class=asset_class)
@@ -324,6 +329,7 @@ class DataService:
             arm_id=arm_id,
             final_portfolio_review=final_portfolio_review,
             asset_class=asset_class,
+            timeframe=timeframe,
         )
         storage_key = self._storage_key(provider, symbol, timeframe)
         if self._store.exists(storage_key) and timeframe != "1m":
@@ -505,6 +511,7 @@ class DataService:
             arm_id=arm_id,
             final_portfolio_review=final_portfolio_review,
             asset_class=asset_class,
+            timeframe=timeframe,
         )
 
         prov = self._get_provider(provider)

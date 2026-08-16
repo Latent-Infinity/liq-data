@@ -142,6 +142,111 @@ class TestIndexReconDataset:
             )
 
 
+class TestDatabentoIndexReconRouting:
+    """Databento daily-bar reads declared as index_recon_book share the
+    index-reconstitution dataset and its fold governance, exactly as the
+    TradeStation routing does."""
+
+    def test_index_recon_book_routes_any_symbol(self) -> None:
+        assert (
+            resolve_dataset("databento", "SPY", asset_class="index_recon_book")
+            == "index_recon_sp500"
+        )
+        assert (
+            resolve_dataset("databento", "AAPL", asset_class="index_recon_book")
+            == "index_recon_sp500"
+        )
+
+    def test_symbol_without_hint_keeps_extended_hours(self) -> None:
+        assert resolve_dataset("databento", "AAPL") == "databento_extended_hours"
+
+    def test_option_hint_still_routes_to_opra(self) -> None:
+        assert resolve_dataset("databento", "SPY", asset_class="option") == "databento_opra_options"
+
+    def test_extended_hours_refuses_discovery(self, guard: LockboxGuard) -> None:
+        # The default databento dataset admits no discovery reads; the
+        # index_recon_book hint is what makes guarded discovery possible.
+        with pytest.raises(LockboxViolationError, match="only admits purposes"):
+            guard.assert_period_allowed(
+                "databento_extended_hours",
+                date(2023, 1, 1),
+                date(2024, 12, 31),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+            )
+
+    def test_index_recon_discovery_2017_allowed(self, guard: LockboxGuard) -> None:
+        dataset = resolve_dataset("databento", "AAPL", asset_class="index_recon_book")
+        assert dataset is not None
+        guard.assert_period_allowed(
+            dataset,
+            date(2017, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="index_reconstitution",
+        )
+
+    def test_index_recon_discovery_before_2017_rejected(self, guard: LockboxGuard) -> None:
+        dataset = resolve_dataset("databento", "AAPL", asset_class="index_recon_book")
+        assert dataset is not None
+        with pytest.raises(LockboxViolationError):
+            guard.assert_period_allowed(
+                dataset,
+                date(2016, 1, 1),
+                date(2016, 12, 31),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+            )
+
+    def test_index_recon_validation_period_refused_for_discovery(self, guard: LockboxGuard) -> None:
+        dataset = resolve_dataset("databento", "AAPL", asset_class="index_recon_book")
+        assert dataset is not None
+        with pytest.raises(LockboxViolationError):
+            guard.assert_period_allowed(
+                dataset,
+                date(2025, 1, 1),
+                date(2025, 12, 31),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+            )
+
+    def test_index_recon_lockbox_read_rejected(self, guard: LockboxGuard) -> None:
+        dataset = resolve_dataset("databento", "AAPL", asset_class="index_recon_book")
+        assert dataset is not None
+        with pytest.raises(LockboxViolationError, match="program lockbox"):
+            guard.assert_period_allowed(
+                dataset,
+                date(2025, 1, 1),
+                date(2026, 1, 1),
+                purpose="validation",
+                arm_id="index_reconstitution",
+            )
+
+    def test_tradestation_routing_unchanged(self) -> None:
+        assert (
+            resolve_dataset("tradestation", "AAPL", asset_class="index_recon_book")
+            == "index_recon_sp500"
+        )
+        assert resolve_dataset("tradestation", "AAPL") == "tradestation_cohort_1m"
+
+    @pytest.mark.parametrize("provider", ["tradestation", "databento"])
+    def test_research_service_rejects_non_daily_index_recon_reads(
+        self, tmp_path: Path, provider: str
+    ) -> None:
+        service = DataService(data_root=tmp_path)
+        with pytest.raises(LockboxViolationError, match="daily bars only"):
+            service.load(
+                provider,
+                "AAPL",
+                "1m",
+                start=date(2020, 1, 1),
+                end=date(2020, 12, 31),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+                asset_class="index_recon_book",
+            )
+
+
 class TestFceLedger:
     """The FCE ledger freezes the approved 2020-2026 source envelope."""
 

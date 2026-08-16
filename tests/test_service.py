@@ -398,6 +398,7 @@ class TestDataServiceFetch:
             arm_id="path_e_crypto_basis_carry",
             final_portfolio_review=False,
             asset_class="future",
+            timeframe="1d",
         )
 
     def test_guard_rejects_fetch_before_provider_call(self, tmp_path: Path) -> None:

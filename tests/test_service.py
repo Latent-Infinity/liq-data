@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -136,6 +137,196 @@ class TestDataServiceLoad:
         assert refreshed.height == 2
         assert refreshed["timestamp"].max() == datetime(2024, 1, 1, 0, 2, tzinfo=UTC)
         assert "Refreshing cached 2m aggregate" in caplog.text
+
+    def test_load_refresh_keeps_daily_history_predating_1m_base(self, tmp_path: Path) -> None:
+        """Refreshing a daily aggregate must not drop history older than the 1m base."""
+        daily_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2017, 1, 3, 21, 0, tzinfo=UTC),
+                    datetime(2018, 1, 2, 21, 0, tzinfo=UTC),
+                    datetime(2019, 1, 2, 21, 0, tzinfo=UTC),
+                    datetime(2020, 1, 2, 21, 0, tzinfo=UTC),
+                ],
+                "open": [1.0, 2.0, 3.0, 4.0],
+                "high": [1.5, 2.5, 3.5, 4.5],
+                "low": [0.5, 1.5, 2.5, 3.5],
+                "close": [1.2, 2.2, 3.2, 4.2],
+                "volume": [10.0, 20.0, 30.0, 40.0],
+            }
+        )
+        write_test_data(tmp_path, "tradestation", "SPY", "1d", daily_df)
+
+        base_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2020, 1, 2, 14, 30, tzinfo=UTC),
+                    datetime(2020, 1, 2, 14, 31, tzinfo=UTC),
+                    datetime(2020, 1, 3, 14, 30, tzinfo=UTC),
+                ],
+                "open": [10.0, 11.0, 12.0],
+                "high": [10.5, 11.5, 12.5],
+                "low": [9.5, 10.5, 11.5],
+                "close": [10.2, 11.2, 12.2],
+                "volume": [100.0, 200.0, 300.0],
+            }
+        )
+        write_test_data(tmp_path, "tradestation", "SPY", "1m", base_df)
+
+        ds = DataService(data_root=tmp_path)
+        result = ds.load("tradestation", "SPY", "1d")
+
+        timestamps = result["timestamp"].to_list()
+        # History older than the 1m base survives the rebuild.
+        assert datetime(2017, 1, 3, 21, 0, tzinfo=UTC) in timestamps
+        assert datetime(2018, 1, 2, 21, 0, tzinfo=UTC) in timestamps
+        assert datetime(2019, 1, 2, 21, 0, tzinfo=UTC) in timestamps
+        # The covered span is rebuilt from 1m: one bar per covered day, refreshed values.
+        covered = result.filter(pl.col("timestamp") >= datetime(2020, 1, 1, tzinfo=UTC))
+        assert covered.height == 2
+        assert covered["close"].to_list() == [11.2, 12.2]
+        assert result.height == 5
+
+    def test_load_refresh_keeps_hourly_history_predating_1m_base(self, tmp_path: Path) -> None:
+        """The same preservation applies to other aggregated timeframes."""
+        hourly_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2023, 12, 29, 15, 0, tzinfo=UTC),
+                    datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
+                ],
+                "open": [1.0, 2.0],
+                "high": [1.5, 2.5],
+                "low": [0.5, 1.5],
+                "close": [1.2, 2.2],
+                "volume": [10.0, 20.0],
+            }
+        )
+        write_test_data(tmp_path, "tradestation", "QQQ", "1h", hourly_df)
+
+        base_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
+                    datetime(2024, 1, 2, 15, 30, tzinfo=UTC),
+                    datetime(2024, 1, 2, 16, 0, tzinfo=UTC),
+                ],
+                "open": [10.0, 11.0, 12.0],
+                "high": [10.5, 11.5, 12.5],
+                "low": [9.5, 10.5, 11.5],
+                "close": [10.2, 11.2, 12.2],
+                "volume": [100.0, 200.0, 300.0],
+            }
+        )
+        write_test_data(tmp_path, "tradestation", "QQQ", "1m", base_df)
+
+        ds = DataService(data_root=tmp_path)
+        result = ds.load("tradestation", "QQQ", "1h")
+
+        timestamps = result["timestamp"].to_list()
+        assert datetime(2023, 12, 29, 15, 0, tzinfo=UTC) in timestamps
+        assert timestamps == [
+            datetime(2023, 12, 29, 15, 0, tzinfo=UTC),
+            datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
+            datetime(2024, 1, 2, 16, 0, tzinfo=UTC),
+        ]
+        # The cached in-span bar is rebuilt from 1m rather than kept alongside it.
+        assert result["close"].to_list() == [1.2, 11.2, 12.2]
+
+    def test_load_refresh_keeps_history_with_decimal_bar_columns(self, tmp_path: Path) -> None:
+        """History preservation holds for the decimal OHLCV dtypes stores use."""
+        decimal_schema = {name: pl.Decimal(38, 8) for name in ("open", "high", "low", "close")}
+        decimal_schema["volume"] = pl.Decimal(38, 2)
+
+        def bars(rows: list[tuple[datetime, str, str]]) -> pl.DataFrame:
+            return pl.DataFrame(
+                {
+                    "timestamp": [row[0] for row in rows],
+                    "open": [Decimal(row[1]) for row in rows],
+                    "high": [Decimal(row[1]) for row in rows],
+                    "low": [Decimal(row[1]) for row in rows],
+                    "close": [Decimal(row[1]) for row in rows],
+                    "volume": [Decimal(row[2]) for row in rows],
+                },
+                schema_overrides=decimal_schema,
+            )
+
+        write_test_data(
+            tmp_path,
+            "tradestation",
+            "DIA",
+            "1d",
+            bars(
+                [
+                    (datetime(2017, 1, 3, 21, 0, tzinfo=UTC), "100.00000000", "1000.00"),
+                    (datetime(2020, 1, 2, 21, 0, tzinfo=UTC), "300.00000000", "3000.00"),
+                ]
+            ),
+        )
+        write_test_data(
+            tmp_path,
+            "tradestation",
+            "DIA",
+            "1m",
+            bars(
+                [
+                    (datetime(2020, 1, 2, 14, 30, tzinfo=UTC), "310.00000000", "10.00"),
+                    (datetime(2020, 1, 3, 14, 30, tzinfo=UTC), "320.00000000", "20.00"),
+                ]
+            ),
+        )
+
+        ds = DataService(data_root=tmp_path)
+        result = ds.load("tradestation", "DIA", "1d")
+
+        assert result["timestamp"].to_list() == [
+            datetime(2017, 1, 3, 21, 0, tzinfo=UTC),
+            datetime(2020, 1, 2, tzinfo=UTC),
+            datetime(2020, 1, 3, tzinfo=UTC),
+        ]
+        assert result["close"].to_list() == [
+            Decimal("100.00000000"),
+            Decimal("310.00000000"),
+            Decimal("320.00000000"),
+        ]
+
+    def test_load_refresh_unchanged_when_1m_base_covers_cached_span(self, tmp_path: Path) -> None:
+        """When the 1m base covers the cached span, the rebuild replaces it wholesale."""
+        daily_df = pl.DataFrame(
+            {
+                "timestamp": [datetime(2024, 1, 1, 0, 0, tzinfo=UTC)],
+                "open": [99.0],
+                "high": [99.0],
+                "low": [99.0],
+                "close": [99.0],
+                "volume": [1.0],
+            }
+        )
+        write_test_data(tmp_path, "tradestation", "IWM", "1d", daily_df)
+
+        base_df = pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2024, 1, 1, 14, 30, tzinfo=UTC),
+                    datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
+                ],
+                "open": [1.0, 2.0],
+                "high": [1.5, 2.5],
+                "low": [0.5, 1.5],
+                "close": [1.2, 2.2],
+                "volume": [10.0, 20.0],
+            }
+        )
+        write_test_data(tmp_path, "tradestation", "IWM", "1m", base_df)
+
+        ds = DataService(data_root=tmp_path)
+        result = ds.load("tradestation", "IWM", "1d")
+
+        assert result["timestamp"].to_list() == [
+            datetime(2024, 1, 1, tzinfo=UTC),
+            datetime(2024, 1, 2, tzinfo=UTC),
+        ]
+        assert result["close"].to_list() == [1.2, 2.2]
 
     def test_load_file_not_found(self, tmp_path: Path) -> None:
         """Test load raises FileNotFoundError for missing data."""
@@ -791,6 +982,63 @@ class TestDataServiceExtended:
         assert fetched_actions == corp_actions
         assert ds.store.exists("oanda/EUR_USD/fundamentals")
         assert ds.store.exists("oanda/EUR_USD/corp_actions")
+
+    def test_declared_corporate_actions_fetch_routes_through_guard(self, tmp_path: Path) -> None:
+        """Reference-data reads use the arm's frozen fold before provider access."""
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.get_corporate_actions.return_value = []
+
+        with (
+            patch.object(ds, "_guard_research_read") as guard,
+            patch.object(ds, "_get_provider", return_value=provider),
+        ):
+            result = ds.fetch_corporate_actions(
+                "alpaca",
+                "AAPL",
+                start=date(2017, 1, 1),
+                end=date(2024, 12, 31),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+                asset_class="index_recon_book",
+            )
+
+        assert result == []
+        guard.assert_called_once_with(
+            "alpaca",
+            "AAPL",
+            date(2017, 1, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="index_reconstitution",
+            final_portfolio_review=False,
+            asset_class="index_recon_book",
+            data_kind="corporate_actions",
+        )
+
+    def test_corporate_actions_guard_rejects_before_provider_access(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(
+                ds,
+                "_guard_research_read",
+                side_effect=LockboxViolationError("blocked"),
+            ),
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="blocked"),
+        ):
+            ds.fetch_corporate_actions(
+                "alpaca",
+                "AAPL",
+                start=date(2026, 1, 1),
+                end=date(2026, 1, 2),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+                asset_class="index_recon_book",
+            )
+
+        get_provider.assert_not_called()
 
     def test_fetch_instruments_and_universe(self, tmp_path: Path) -> None:
         """Instrument and universe helpers delegate to provider."""

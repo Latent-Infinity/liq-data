@@ -102,6 +102,12 @@ class TestIndexReconDataset:
             resolve_dataset("tradestation", "AAPL", asset_class="index_recon_book")
             == "index_recon_sp500"
         )
+        assert (
+            resolve_dataset("alpaca", "AAPL", asset_class="index_recon_book") == "index_recon_sp500"
+        )
+
+    def test_alpaca_without_index_recon_hint_is_not_campaign_data(self) -> None:
+        assert resolve_dataset("alpaca", "AAPL") is None
 
     def test_symbol_without_hint_falls_to_cohort(self) -> None:
         assert resolve_dataset("tradestation", "AAPL") == "tradestation_cohort_1m"

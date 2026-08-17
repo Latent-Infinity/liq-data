@@ -401,6 +401,122 @@ class TestAlpacaProviderFetchBars:
         assert "/AAPL/" in str(route.calls[0].request.url)
 
 
+class TestAlpacaProviderCorporateActions:
+    """Tests for the v1 corporate-actions market-data endpoint."""
+
+    @respx.mock
+    def test_get_corporate_actions_flattens_typed_groups(
+        self,
+        alpaca_provider: AlpacaProvider,
+    ) -> None:
+        """Provider keeps the response group so heterogeneous rows stay identifiable."""
+        route = respx.get("https://data.alpaca.markets/v1/corporate-actions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "corporate_actions": {
+                        "cash_dividends": [
+                            {
+                                "id": "3fa6553a-4211-4018-85b9-d34d4d744c06",
+                                "symbol": "AAPL",
+                                "cusip": "037833100",
+                                "rate": 0.22,
+                                "process_date": "2021-10-28",
+                                "ex_date": "2021-11-05",
+                                "record_date": "2021-11-08",
+                                "payable_date": "2021-11-11",
+                            }
+                        ],
+                        "forward_splits": [],
+                    },
+                    "next_page_token": None,
+                },
+            )
+        )
+
+        result = alpaca_provider.get_corporate_actions(
+            "aapl",
+            start=date(2021, 1, 1),
+            end=date(2021, 12, 31),
+        )
+
+        assert result == [
+            {
+                "id": "3fa6553a-4211-4018-85b9-d34d4d744c06",
+                "symbol": "AAPL",
+                "cusip": "037833100",
+                "rate": 0.22,
+                "process_date": "2021-10-28",
+                "ex_date": "2021-11-05",
+                "record_date": "2021-11-08",
+                "payable_date": "2021-11-11",
+                "corporate_action_type": "cash_dividends",
+            }
+        ]
+        request = route.calls[0].request
+        assert request.url.params["symbols"] == "AAPL"
+        assert request.url.params["start"] == "2021-01-01"
+        assert request.url.params["end"] == "2021-12-31"
+        assert request.url.params["limit"] == "1000"
+        assert request.url.params["data_quality"] == "complete"
+        assert request.url.params["sort"] == "asc"
+
+    @respx.mock
+    def test_get_corporate_actions_paginates(
+        self,
+        alpaca_provider: AlpacaProvider,
+    ) -> None:
+        route = respx.get("https://data.alpaca.markets/v1/corporate-actions")
+        route.side_effect = [
+            httpx.Response(
+                200,
+                json={
+                    "corporate_actions": {"forward_splits": [{"id": "split-1", "symbol": "AAPL"}]},
+                    "next_page_token": "page-2",
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "corporate_actions": {
+                        "cash_dividends": [{"id": "dividend-1", "symbol": "AAPL"}]
+                    },
+                    "next_page_token": None,
+                },
+            ),
+        ]
+
+        result = alpaca_provider.get_corporate_actions(
+            "AAPL",
+            start=date(2021, 1, 1),
+            end=date(2021, 12, 31),
+        )
+
+        assert [row["corporate_action_type"] for row in result] == [
+            "forward_splits",
+            "cash_dividends",
+        ]
+        assert route.call_count == 2
+        assert "page_token" not in route.calls[0].request.url.params
+        assert route.calls[1].request.url.params["page_token"] == "page-2"
+
+    @respx.mock
+    def test_get_corporate_actions_rejects_malformed_payload(
+        self,
+        alpaca_provider: AlpacaProvider,
+    ) -> None:
+        respx.get("https://data.alpaca.markets/v1/corporate-actions").mock(
+            return_value=httpx.Response(200, json={"corporate_actions": []})
+        )
+
+        with pytest.raises(ProviderError, match="malformed corporate-actions response"):
+            alpaca_provider.get_corporate_actions(
+                "AAPL",
+                start=date(2021, 1, 1),
+                end=date(2021, 12, 31),
+            )
+
+
 class TestAlpacaProviderListInstruments:
     """Tests for AlpacaProvider.list_instruments method."""
 

@@ -246,6 +246,65 @@ class AlpacaProvider(BaseProvider):
 
         return self.bars_to_dataframe(all_bars)
 
+    def get_corporate_actions(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+    ) -> list[dict[str, Any]]:
+        """Fetch complete-quality corporate actions for one US equity.
+
+        Alpaca groups heterogeneous action records by type. The provider
+        flattens those groups while retaining the group name in
+        ``corporate_action_type`` so callers can distinguish splits,
+        distributions, and other actions without relying on row shape.
+
+        The endpoint filters and sorts on ``process_date``; consumers that
+        need ex-date coverage must evaluate the returned date fields and must
+        not interpret an empty response as proof of source completeness.
+        """
+        api_symbol = self._normalize_symbol(symbol)
+        url = f"{self.DATA_BASE_URL}/v1/corporate-actions"
+        params: dict[str, Any] = {
+            "symbols": api_symbol,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "limit": 1000,
+            "data_quality": "complete",
+            "sort": "asc",
+        }
+
+        actions: list[dict[str, Any]] = []
+        page_token: str | None = None
+        while True:
+            if page_token:
+                params["page_token"] = page_token
+            else:
+                params.pop("page_token", None)
+
+            data = self._make_request("GET", url, params)
+            grouped = data.get("corporate_actions") if isinstance(data, dict) else None
+            if not isinstance(grouped, dict):
+                raise ProviderError("Alpaca returned a malformed corporate-actions response")
+
+            for action_type, records in grouped.items():
+                if not isinstance(records, list):
+                    raise ProviderError("Alpaca returned a malformed corporate-actions response")
+                for record in records:
+                    if not isinstance(record, dict):
+                        raise ProviderError(
+                            "Alpaca returned a malformed corporate-actions response"
+                        )
+                    normalized = dict(record)
+                    normalized.setdefault("corporate_action_type", action_type)
+                    actions.append(normalized)
+
+            page_token = data.get("next_page_token")
+            if not page_token:
+                break
+
+        return actions
+
     def list_instruments(self, asset_class: str | None = None) -> pl.DataFrame:  # noqa: ARG002
         """List available assets from Alpaca.
 

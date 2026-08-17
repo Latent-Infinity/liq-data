@@ -185,11 +185,12 @@ class DataService:
         final_portfolio_review: bool,
         asset_class: str | None = None,
         timeframe: str | None = None,
+        data_kind: str = "bars",
     ) -> None:
         """Route a declared-purpose read through the lockbox guard."""
         if purpose is None:
             return
-        if asset_class == "index_recon_book" and timeframe != "1d":
+        if asset_class == "index_recon_book" and data_kind == "bars" and timeframe != "1d":
             raise LockboxViolationError(
                 "index_recon_book research reads admit daily bars only (timeframe='1d')"
             )
@@ -210,6 +211,20 @@ class DataService:
     def _storage_key(self, provider: str, symbol: str, timeframe: str) -> str:
         """Build storage key for bars via provider/key_builder."""
         return f"{provider}/{key_builder.bars(symbol, timeframe)}"
+
+    def _keep_bars_before_span(self, storage_key: str, aggregated: pl.DataFrame) -> pl.DataFrame:
+        """Prepend cached bars that predate a rebuilt aggregate's span.
+
+        A rebuild regenerates only the span its 1m base covers, so cached bars
+        older than that span (e.g. daily history reaching back further than 1m
+        coverage) must survive the write instead of being truncated away.
+        """
+        span_start = cast(datetime, aggregated["timestamp"].min())
+        cached = self._store.read(storage_key, end=span_start.date())
+        history = cached.filter(pl.col("timestamp") < span_start)
+        if history.is_empty():
+            return aggregated
+        return pl.concat([history, aggregated], how="diagonal_relaxed").sort("timestamp")
 
     def _get_provider(self, provider_name: str) -> MarketDataProvider:
         """Get a provider instance by name.
@@ -361,7 +376,8 @@ class DataService:
                         )
                         aggregated = aggregate_bars(base_df, timeframe)
                         if not aggregated.is_empty():
-                            self._store.write(storage_key, aggregated, mode="overwrite")
+                            rebuilt = self._keep_bars_before_span(storage_key, aggregated)
+                            self._store.write(storage_key, rebuilt, mode="overwrite")
         if not self._store.exists(storage_key):
             if timeframe != "1m":
                 base_key = self._storage_key(provider, symbol, "1m")
@@ -570,8 +586,24 @@ class DataService:
         start: date,
         end: date,
         save: bool = False,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        final_portfolio_review: bool = False,
+        asset_class: str | None = None,
     ) -> list[Any]:
-        """Fetch corporate actions when supported."""
+        """Fetch corporate actions through the research guard when declared."""
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
+            asset_class=asset_class,
+            data_kind="corporate_actions",
+        )
         prov = self._get_provider(provider)
         if not hasattr(prov, "get_corporate_actions"):
             raise ValueError(f"Provider {provider} does not support corporate actions")

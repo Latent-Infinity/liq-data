@@ -83,6 +83,7 @@ addopts = "-ra -q --cov=liq.data --cov-report=term-missing --cov-fail-under=90"
 asyncio_mode = "auto"
 markers = [
     "databento: opt-in tests that hit the real Databento API (set RUN_DATABENTO=1)",
+    "realdata: opt-in tests that read the real DATA_ROOT reference universes (set RUN_REALDATA=1)",
 ]
 
 [tool.coverage.run]

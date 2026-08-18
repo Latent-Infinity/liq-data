@@ -1,6 +1,7 @@
 """Tests for liq.data.providers.tradestation module."""
 
 from datetime import date
+from unittest.mock import patch
 
 import httpx
 import polars as pl
@@ -411,6 +412,59 @@ class TestTradeStationProviderIntradayLimits:
         assert tradestation_provider._safe_bars_per_request("1d") == 57_600
         assert tradestation_provider._safe_bars_per_request("1w") == 57_600
 
+    def test_daily_window_request_is_bounded_by_calendar_days(
+        self,
+        tradestation_provider: TradeStationProvider,
+    ) -> None:
+        start = date(2021, 6, 15)
+        end = date(2025, 12, 31)
+
+        assert tradestation_provider._bars_per_request_for_window("1d", start, end) == (
+            end - start
+        ).days + 1
+
+    def test_weekly_window_request_has_boundary_cushion(
+        self,
+        tradestation_provider: TradeStationProvider,
+    ) -> None:
+        assert (
+            tradestation_provider._bars_per_request_for_window(
+                "1w", date(2024, 1, 1), date(2024, 1, 31)
+            )
+            == 7
+        )
+
+    def test_intraday_window_keeps_existing_request_cap(
+        self,
+        tradestation_provider: TradeStationProvider,
+    ) -> None:
+        assert tradestation_provider._bars_per_request_for_window(
+            "15m", date(2024, 1, 1), date(2024, 1, 31)
+        ) == (500_000 // 15)
+
+    @respx.mock
+    def test_fetch_bars_daily_uses_window_bounded_barsback(
+        self,
+        tradestation_provider: TradeStationProvider,
+        mock_token_response: dict,
+    ) -> None:
+        respx.post("https://signin.tradestation.com/oauth/token").mock(
+            return_value=httpx.Response(200, json=mock_token_response)
+        )
+        captured_params: list[dict[str, str]] = []
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            captured_params.append(dict(request.url.params))
+            return httpx.Response(200, json={"Bars": []})
+
+        respx.get(url__regex=r".*/marketdata/barcharts/OLD.*").mock(side_effect=_capture)
+        start = date(2021, 6, 15)
+        end = date(2025, 12, 31)
+
+        tradestation_provider.fetch_bars("OLD", start, end, timeframe="1d")
+
+        assert captured_params[0]["barsback"] == str((end - start).days + 1)
+
     @respx.mock
     def test_fetch_bars_15m_uses_chunked_barsback(
         self,
@@ -528,6 +582,72 @@ class TestTradeStationProviderRateLimitBackoff:
         assert len(result) >= 1
         # First attempt 429, second attempt 200, third attempt empty-terminate.
         assert call_count["n"] >= 2
+
+    @respx.mock
+    def test_rate_limit_waits_for_official_reset_header(
+        self,
+        mock_token_response: dict,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        provider = TradeStationProvider(
+            client_id="test_client_id",
+            client_secret="test_client_secret",
+            refresh_token="test_refresh_token",
+            retry_base_delay_s=1.0,
+            retry_max_attempts=1,
+        )
+        respx.post("https://signin.tradestation.com/oauth/token").mock(
+            return_value=httpx.Response(200, json=mock_token_response)
+        )
+        responses = [
+            httpx.Response(
+                429,
+                json={"error": "rate_limit_exceeded"},
+                headers={"X-RateLimit-Reset": "287"},
+            ),
+            httpx.Response(200, json={"Bars": []}),
+        ]
+        respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(side_effect=responses)
+
+        with patch("liq.data.providers.tradestation.time.sleep") as sleep:
+            provider.fetch_bars(
+                "AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1d"
+            )
+
+        sleep.assert_called_once_with(287.0)
+        assert "waiting 287.000 seconds" in caplog.text
+
+    @respx.mock
+    def test_invalid_reset_header_uses_exponential_fallback(
+        self,
+        mock_token_response: dict,
+    ) -> None:
+        provider = TradeStationProvider(
+            client_id="test_client_id",
+            client_secret="test_client_secret",
+            refresh_token="test_refresh_token",
+            retry_base_delay_s=1.0,
+            retry_max_attempts=1,
+        )
+        respx.post("https://signin.tradestation.com/oauth/token").mock(
+            return_value=httpx.Response(200, json=mock_token_response)
+        )
+        responses = [
+            httpx.Response(
+                429,
+                json={"error": "rate_limit_exceeded"},
+                headers={"X-RateLimit-Reset": "not-a-number"},
+            ),
+            httpx.Response(200, json={"Bars": []}),
+        ]
+        respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(side_effect=responses)
+
+        with patch("liq.data.providers.tradestation.time.sleep") as sleep:
+            provider.fetch_bars(
+                "AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1d"
+            )
+
+        sleep.assert_called_once_with(1.0)
 
     @respx.mock
     def test_rate_limit_exhausts_retries_then_raises(

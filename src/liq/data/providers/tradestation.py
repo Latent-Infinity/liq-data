@@ -9,7 +9,7 @@ Features:
 - Stock and futures instrument discovery
 - OHLCV bar data via GetBars endpoint
 - OAuth2 authentication with automatic token refresh
-- Rate limiting (120 requests/minute)
+- Rate-limit reset handling from TradeStation response headers
 - Automatic pagination for large date ranges
 """
 
@@ -30,6 +30,14 @@ from liq.data.exceptions import (
 from liq.data.providers.base import BaseProvider
 
 logger = logging.getLogger(__name__)
+
+
+class _TradeStationRateLimitError(RateLimitError):
+    """Rate limit with the provider-declared reset delay, when present."""
+
+    def __init__(self, retry_after_s: float | None) -> None:
+        super().__init__("TradeStation rate limit exceeded")
+        self.retry_after_s = retry_after_s
 
 
 class TradeStationProvider(BaseProvider):
@@ -306,7 +314,14 @@ class TradeStationProvider(BaseProvider):
             raise AuthenticationError(f"TradeStation authentication failed: {response.text}")
 
         if response.status_code == 429:
-            raise RateLimitError("TradeStation rate limit exceeded")
+            reset_header = response.headers.get("X-RateLimit-Reset")
+            try:
+                retry_after_s = float(reset_header) if reset_header is not None else None
+            except ValueError:
+                retry_after_s = None
+            if retry_after_s is not None and retry_after_s < 0:
+                retry_after_s = None
+            raise _TradeStationRateLimitError(retry_after_s)
 
         if response.status_code != 200:
             raise ProviderError(f"TradeStation API error: {response.status_code} - {response.text}")
@@ -330,11 +345,21 @@ class TradeStationProvider(BaseProvider):
         for attempt in range(self._retry_max_attempts + 1):
             try:
                 return self._make_request(method, endpoint, params)
-            except RateLimitError:
+            except RateLimitError as error:
                 if attempt == self._retry_max_attempts:
                     raise
-                if delay > 0:
-                    time.sleep(delay)
+                retry_after_s = (
+                    error.retry_after_s
+                    if isinstance(error, _TradeStationRateLimitError)
+                    else None
+                )
+                wait_s = retry_after_s if retry_after_s is not None else delay
+                if wait_s > 0:
+                    logger.warning(
+                        "TradeStation rate limited; waiting %.3f seconds before retry",
+                        wait_s,
+                    )
+                    time.sleep(wait_s)
                 delay *= 2
         # Unreachable — loop either returns or raises.
         raise RateLimitError("TradeStation rate limit exceeded after retries")
@@ -350,6 +375,24 @@ class TradeStationProvider(BaseProvider):
             minute_cap = self.INTRADAY_MINUTE_LIMIT_PER_REQUEST // interval
             return min(self.MAX_BARS_PER_REQUEST, minute_cap)
         return self.MAX_BARS_PER_REQUEST
+
+    def _bars_per_request_for_window(self, timeframe: str, start: date, end: date) -> int:
+        """Bound coarse-bar requests to the requested calendar span.
+
+        A calendar-day upper bound cannot omit a daily observation because a
+        market has at most one daily bar per calendar date. Weekly requests
+        retain two boundary bars as a conservative cushion. Intraday requests
+        keep their existing provider-limit pagination contract.
+        """
+        safe_cap = self._safe_bars_per_request(timeframe)
+        unit, _ = self.TIMEFRAME_MAP[timeframe]
+        span_days = max(1, (end - start).days + 1)
+        if unit == "Daily":
+            return min(safe_cap, span_days)
+        if unit == "Weekly":
+            weekly_upper_bound = (span_days + 6) // 7 + 2
+            return min(safe_cap, weekly_upper_bound)
+        return safe_cap
 
     def _normalize_symbol(self, symbol: str) -> str:
         """Normalize symbol for TradeStation API.
@@ -402,7 +445,7 @@ class TradeStationProvider(BaseProvider):
         current_end = datetime.combine(end, datetime.max.time()).replace(tzinfo=UTC)
         start_dt = datetime.combine(start, datetime.min.time()).replace(tzinfo=UTC)
 
-        bars_per_request = self._safe_bars_per_request(timeframe)
+        bars_per_request = self._bars_per_request_for_window(timeframe, start, end)
         while current_end > start_dt:
             # Build params
             params: dict[str, Any] = {

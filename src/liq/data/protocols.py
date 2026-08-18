@@ -123,12 +123,25 @@ class MarketDataProvider(Protocol):
         """Fetch corporate actions (splits/dividends) if supported."""
         ...
 
+    def get_adjustment_factors(self, symbol: str, start: date, end: date) -> list[Any]:
+        """Fetch price/volume adjustment factors if supported."""
+        ...
+
     def get_universe(self, asset_class: str, as_of: date | None = None) -> list[str]:
         """List tradeable symbols (survivorship-bias free) for an asset class."""
         ...
 
     def fetch_instruments(self, asset_class: str) -> list[Any]:
         """Fetch instruments metadata for an asset class."""
+        ...
+
+
+@runtime_checkable
+class CorporateActionsProvider(Protocol):
+    """Narrow capability contract for corporate-action reference adapters."""
+
+    def get_corporate_actions(self, symbol: str, start: date, end: date) -> list[Any]:
+        """Fetch corporate actions for an inclusive date range."""
         ...
 
 

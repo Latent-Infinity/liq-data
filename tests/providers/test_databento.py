@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import pandas as pd
 import polars as pl
 import pytest
 from hypothesis import given, settings
@@ -118,6 +119,35 @@ class _FakeClient:
         self.batch = _FakeBatch(store)
 
 
+class _FakeReferenceEndpoint:
+    """Record reference calls while returning a committed in-memory frame."""
+
+    def __init__(self, frame: pd.DataFrame) -> None:
+        self._frame = frame
+        self.calls: list[dict] = []
+
+    def get_range(self, **kwargs) -> pd.DataFrame:
+        self.calls.append(kwargs)
+        return self._frame
+
+
+class _FakeReferenceClient:
+    """Drop-in for ``databento.Reference`` in offline unit tests."""
+
+    def __init__(
+        self,
+        *,
+        corporate_actions: pd.DataFrame | None = None,
+        adjustment_factors: pd.DataFrame | None = None,
+    ) -> None:
+        self.corporate_actions = _FakeReferenceEndpoint(
+            corporate_actions if corporate_actions is not None else pd.DataFrame()
+        )
+        self.adjustment_factors = _FakeReferenceEndpoint(
+            adjustment_factors if adjustment_factors is not None else pd.DataFrame()
+        )
+
+
 # ----- helpers ---------------------------------------------------------------
 
 
@@ -171,6 +201,95 @@ def _make_provider(
     client = _FakeClient(store)
     provider = DatabentoProvider(api_key="test-key", client=client)
     return provider, client
+
+
+class TestReferenceData:
+    def test_corporate_actions_are_pit_and_normalized(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "event": ["Stock Split"],
+                "ts_record": [pd.Timestamp("2020-08-01T12:00:00Z")],
+                "ratio": [4.0],
+                "optional_value": [pd.NA],
+            },
+            index=pd.Index([date(2020, 8, 31)], name="event_date"),
+        )
+        reference = _FakeReferenceClient(corporate_actions=frame)
+        provider = DatabentoProvider(api_key="test-key", reference_client=reference)
+
+        actions = provider.get_corporate_actions("BRK-B", date(2020, 8, 1), date(2020, 8, 31))
+
+        assert actions == [
+            {
+                "event_date": "2020-08-31",
+                "event": "Stock Split",
+                "ts_record": "2020-08-01T12:00:00+00:00",
+                "ratio": 4.0,
+                "optional_value": None,
+                "corporate_action_type": "Stock Split",
+            }
+        ]
+        assert reference.corporate_actions.calls == [
+            {
+                "start": date(2020, 8, 1),
+                "end": date(2020, 9, 1),
+                "index": "event_date",
+                "symbols": ["BRK.B"],
+                "stype_in": "raw_symbol",
+                "countries": ["US"],
+                "flatten": True,
+                "pit": True,
+            }
+        ]
+
+    def test_adjustment_factors_are_normalized(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "symbol": ["AAPL"],
+                "price_factor": [0.25],
+                "ts_record": [pd.Timestamp("2020-08-01T12:00:00Z")],
+            },
+            index=pd.Index([date(2020, 8, 31)], name="ex_date"),
+        )
+        reference = _FakeReferenceClient(adjustment_factors=frame)
+        provider = DatabentoProvider(api_key="test-key", reference_client=reference)
+
+        factors = provider.get_adjustment_factors("AAPL", date(2020, 8, 1), date(2020, 8, 31))
+
+        assert factors == [
+            {
+                "ex_date": "2020-08-31",
+                "symbol": "AAPL",
+                "price_factor": 0.25,
+                "ts_record": "2020-08-01T12:00:00+00:00",
+            }
+        ]
+        assert reference.adjustment_factors.calls == [
+            {
+                "start": date(2020, 8, 1),
+                "end": date(2020, 9, 1),
+                "symbols": ["AAPL"],
+                "stype_in": "raw_symbol",
+                "countries": ["US"],
+            }
+        ]
+
+    @pytest.mark.parametrize("method_name", ["get_corporate_actions", "get_adjustment_factors"])
+    def test_reference_range_is_validated_before_client_access(self, method_name: str) -> None:
+        reference = _FakeReferenceClient()
+        provider = DatabentoProvider(api_key="test-key", reference_client=reference)
+
+        with pytest.raises(ValueError, match="end"):
+            getattr(provider, method_name)("AAPL", date(2020, 9, 1), date(2020, 8, 31))
+
+        assert reference.corporate_actions.calls == []
+        assert reference.adjustment_factors.calls == []
+
+    def test_empty_reference_frame_returns_no_records(self) -> None:
+        reference = _FakeReferenceClient()
+        provider = DatabentoProvider(api_key="test-key", reference_client=reference)
+
+        assert provider.get_corporate_actions("AAPL", date(2020, 8, 1), date(2020, 8, 31)) == []
 
 
 # ----- dataset routing -------------------------------------------------------

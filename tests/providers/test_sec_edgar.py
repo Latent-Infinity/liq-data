@@ -19,6 +19,7 @@ from liq.data.providers.sec_edgar import (
     SECEdgarProvider,
     complete_submission_url,
     parse_edgar_accession_metadata,
+    sec_archive_document_url,
 )
 from liq.data.settings import LiqDataSettings, create_sec_edgar_provider
 
@@ -86,6 +87,7 @@ SUBMISSIONS_JSON = {
 
 
 def _provider(**kwargs) -> SECEdgarProvider:
+    kwargs.setdefault("retry_backoff_seconds", 0.0)
     return SECEdgarProvider(user_agent="test test@example.com", **kwargs)
 
 
@@ -336,6 +338,23 @@ class TestFetch8KEvents:
 
 
 class TestAccessionMetadata:
+    def test_builds_archive_document_url_from_safe_basename(self) -> None:
+        assert sec_archive_document_url(
+            "0000002488",
+            "0000002488-20-000006",
+            "amdq4andfy2019earningsslides.pdf",
+        ) == (
+            "https://www.sec.gov/Archives/edgar/data/2488/"
+            "000000248820000006/amdq4andfy2019earningsslides.pdf"
+        )
+
+        with pytest.raises(ValueError, match="SEC document filename must be a basename"):
+            sec_archive_document_url(
+                "0000002488",
+                "0000002488-20-000006",
+                "../action.pdf",
+            )
+
     def test_complete_submission_url_is_bound_to_cik_and_accession(self) -> None:
         assert complete_submission_url(320193, "0000320193-23-000075") == COMPLETE_SUBMISSION_URL
 
@@ -410,16 +429,51 @@ class TestAccessionMetadata:
 
 class TestErrors:
     @respx.mock
+    def test_timeout_is_retried_then_succeeds(self) -> None:
+        route = respx.get(TICKERS_URL).mock(
+            side_effect=[
+                httpx.ReadTimeout("slow SEC response"),
+                httpx.Response(200, json=TICKERS_JSON),
+            ]
+        )
+
+        assert _provider().resolve_cik("AAPL") == "0000320193"
+        assert route.call_count == 2
+
+    @respx.mock
+    def test_server_error_is_retried_then_succeeds(self) -> None:
+        route = respx.get(TICKERS_URL).mock(
+            side_effect=[
+                httpx.Response(503, json={}),
+                httpx.Response(200, json=TICKERS_JSON),
+            ]
+        )
+
+        assert _provider().resolve_cik("AAPL") == "0000320193"
+        assert route.call_count == 2
+
+    @respx.mock
+    def test_client_error_is_not_retried(self) -> None:
+        route = respx.get(TICKERS_URL).mock(return_value=httpx.Response(404, json={}))
+
+        with pytest.raises(ProviderError, match="HTTP 404"):
+            _provider().resolve_cik("AAPL")
+
+        assert route.call_count == 1
+
+    @respx.mock
     def test_429_raises_rate_limit_error(self) -> None:
-        respx.get(TICKERS_URL).mock(return_value=httpx.Response(429, json={}))
+        route = respx.get(TICKERS_URL).mock(return_value=httpx.Response(429, json={}))
         with pytest.raises(RateLimitError):
             _provider().resolve_cik("AAPL")
+        assert route.call_count == 1
 
     @respx.mock
     def test_transport_error_wrapped_as_provider_error(self) -> None:
-        respx.get(TICKERS_URL).mock(side_effect=httpx.ConnectError("boom"))
+        route = respx.get(TICKERS_URL).mock(side_effect=httpx.ConnectError("boom"))
         with pytest.raises(ProviderError):
             _provider().resolve_cik("AAPL")
+        assert route.call_count == 3
 
     @respx.mock
     def test_non_200_raises_provider_error(self) -> None:

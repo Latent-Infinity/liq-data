@@ -50,7 +50,7 @@ from liq.data.exceptions import LockboxViolationError, ProviderNoDataError
 from liq.data.gaps import detect_gaps
 from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, LockboxLedger, resolve_dataset
 from liq.data.policies import POLICIES
-from liq.data.protocols import BatchJob, BatchMarketDataProvider
+from liq.data.protocols import BatchJob, BatchMarketDataProvider, CorporateActionsProvider
 from liq.data.providers.databento import SCHEMA_BY_TIMEFRAME
 from liq.data.qa import validate_ohlc
 from liq.data.rate_limiter import RateLimiter
@@ -63,6 +63,7 @@ from liq.data.settings import (
     create_fred_provider,
     create_oanda_provider,
     create_polygon_provider,
+    create_sec_edgar_provider,
     create_tradestation_provider,
     get_settings,
 )
@@ -123,6 +124,11 @@ class DataService:
         "fred": create_fred_provider,
         "databento": create_databento_provider,
     }
+    _CORPORATE_ACTION_FACTORIES: ClassVar[
+        dict[str, Callable[[LiqDataSettings], CorporateActionsProvider]]
+    ] = {
+        "sec_edgar": create_sec_edgar_provider,
+    }
 
     def __init__(
         self,
@@ -142,6 +148,7 @@ class DataService:
         self._store = ParquetStore(str(self._data_root))
         self._lockbox_ledger = lockbox_ledger
         self._lockbox_guard: LockboxGuard | None = None
+        self._corporate_actions_provider_cache: dict[str, CorporateActionsProvider] = {}
 
     @property
     def settings(self) -> LiqDataSettings:
@@ -246,6 +253,23 @@ class DataService:
         set_store = getattr(provider, "set_store", None)
         if callable(set_store):
             set_store(self._store)
+        return provider
+
+    def _get_corporate_actions_provider(self, provider_name: str) -> CorporateActionsProvider:
+        """Get a provider through its narrow corporate-action capability."""
+        normalized_name = provider_name.lower()
+        cached = self._corporate_actions_provider_cache.get(normalized_name)
+        if cached is not None:
+            return cached
+        factory = self._CORPORATE_ACTION_FACTORIES.get(normalized_name)
+        if factory is not None:
+            provider = factory(self._settings)
+            self._corporate_actions_provider_cache[normalized_name] = provider
+            return provider
+        provider = self._get_provider(provider_name)
+        if not isinstance(provider, CorporateActionsProvider):
+            raise ValueError(f"Provider {provider_name} does not support corporate actions")
+        self._corporate_actions_provider_cache[normalized_name] = provider
         return provider
 
     @overload
@@ -604,14 +628,41 @@ class DataService:
             asset_class=asset_class,
             data_kind="corporate_actions",
         )
-        prov = self._get_provider(provider)
-        if not hasattr(prov, "get_corporate_actions"):
-            raise ValueError(f"Provider {provider} does not support corporate actions")
+        prov = self._get_corporate_actions_provider(provider)
         actions = prov.get_corporate_actions(symbol, start, end)
         if save and actions:
             key = f"{provider}/{key_builder.corp_actions(symbol)}"
             self._store.write(key, pl.DataFrame(actions), mode="overwrite")
         return actions
+
+    def fetch_adjustment_factors(
+        self,
+        provider: str,
+        symbol: str,
+        start: date,
+        end: date,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        final_portfolio_review: bool = False,
+        asset_class: str | None = None,
+    ) -> list[Any]:
+        """Fetch adjustment factors through the research guard when declared."""
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
+            asset_class=asset_class,
+            data_kind="adjustment_factors",
+        )
+        prov = self._get_provider(provider)
+        if not hasattr(prov, "get_adjustment_factors"):
+            raise ValueError(f"Provider {provider} does not support adjustment factors")
+        return prov.get_adjustment_factors(symbol, start, end)
 
     def get_universe(self, provider: str, asset_class: str, as_of: date | None = None) -> list[str]:
         """Return tradeable symbols for an asset class if supported."""

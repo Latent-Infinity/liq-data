@@ -17,11 +17,13 @@ and requests are throttled to 8/sec via the shared :class:`RateLimiter`.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import polars as pl
@@ -34,6 +36,9 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 SUBMISSIONS_ARCHIVE_URL = "https://data.sec.gov/submissions/{name}"
 COMPLETE_SUBMISSION_URL = (
     "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_nodash}/{accession}.txt"
+)
+SEC_ARCHIVE_DOCUMENT_URL = (
+    "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_nodash}/{filename}"
 )
 
 _ACCESSION_PATTERN = re.compile(r"\d{10}-\d{2}-\d{6}")
@@ -49,6 +54,8 @@ _EVENT_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
 }
 
 DEFAULT_8K_ITEMS = frozenset({"1.01", "2.02", "5.02", "7.01", "8.01"})
+CORPORATE_ACTION_8K_ITEMS = frozenset({"2.02", "3.03", "5.03", "7.01", "8.01"})
+CORPORATE_ACTION_FILING_LOOKBACK_DAYS = 370
 
 _GENERIC_8K_EVENT_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     **_EVENT_SCHEMA,
@@ -68,6 +75,16 @@ class EdgarAccessionMetadata:
     has_ex_99_1: bool
     document_types: tuple[str, ...]
     source_url: str
+
+
+@dataclass(frozen=True)
+class EdgarFilingDocument:
+    """One document from an EDGAR complete-submission SGML envelope."""
+
+    document_type: str
+    filename: str | None
+    description: str | None
+    text: str
 
 
 class _TradingSymbolParser(HTMLParser):
@@ -119,6 +136,26 @@ def complete_submission_url(cik: int | str, accession_number: str) -> str:
     )
 
 
+def sec_archive_document_url(
+    cik: int | str,
+    accession_number: str,
+    filename: str,
+) -> str:
+    """Return the official URL for a safe accession attachment basename."""
+    cik10 = _pad_cik(cik)
+    if len(cik10) != 10 or not cik10.isdigit():
+        raise ValueError("CIK must contain at most 10 decimal digits")
+    if _ACCESSION_PATTERN.fullmatch(accession_number) is None:
+        raise ValueError("accession_number must match ##########-##-######")
+    if not filename or filename in {".", ".."} or "/" in filename or "\\" in filename:
+        raise ValueError("SEC document filename must be a basename")
+    return SEC_ARCHIVE_DOCUMENT_URL.format(
+        cik=int(cik10),
+        accession_nodash=accession_number.replace("-", ""),
+        filename=quote(filename, safe="-._"),
+    )
+
+
 def _sgml_field(document: str, field: str) -> str | None:
     match = re.search(rf"(?im)^\s*<{field}>\s*([^\r\n<]+)", document)
     return match.group(1).strip() if match else None
@@ -127,6 +164,24 @@ def _sgml_field(document: str, field: str) -> str | None:
 def _sgml_text(document: str) -> str:
     match = re.search(r"<TEXT>\s*(.*?)</TEXT>", document, re.IGNORECASE | re.DOTALL)
     return match.group(1) if match else ""
+
+
+def parse_edgar_documents(submission_text: str) -> tuple[EdgarFilingDocument, ...]:
+    """Parse the typed documents in one complete-submission SGML payload."""
+    documents: list[EdgarFilingDocument] = []
+    for document in _DOCUMENT_PATTERN.findall(submission_text):
+        document_type = _sgml_field(document, "TYPE")
+        if document_type is None:
+            continue
+        documents.append(
+            EdgarFilingDocument(
+                document_type=document_type.upper(),
+                filename=_sgml_field(document, "FILENAME"),
+                description=_sgml_field(document, "DESCRIPTION"),
+                text=_sgml_text(document),
+            )
+        )
+    return tuple(documents)
 
 
 def _filing_symbols(primary_documents: list[str]) -> tuple[str, ...]:
@@ -156,14 +211,10 @@ def parse_edgar_accession_metadata(
     cik10 = _pad_cik(cik)
     document_types: list[str] = []
     primary_documents: list[str] = []
-    for document in _DOCUMENT_PATTERN.findall(submission_text):
-        document_type = _sgml_field(document, "TYPE")
-        if document_type is None:
-            continue
-        normalized_type = document_type.upper()
-        document_types.append(normalized_type)
-        if normalized_type == "8-K":
-            primary_documents.append(_sgml_text(document))
+    for document in parse_edgar_documents(submission_text):
+        document_types.append(document.document_type)
+        if document.document_type == "8-K":
+            primary_documents.append(document.text)
     return EdgarAccessionMetadata(
         cik=cik10,
         accession_number=accession_number,
@@ -308,13 +359,21 @@ class SECEdgarProvider:
         self,
         user_agent: str,
         *,
-        timeout: float = 30.0,
+        timeout: float = 60.0,
         min_interval_seconds: float = 0.125,
+        max_request_attempts: int = 3,
+        retry_backoff_seconds: float = 0.5,
     ) -> None:
         if not user_agent:
             raise ConfigurationError("SEC EDGAR requires a contact user_agent (fair-use policy)")
+        if max_request_attempts < 1:
+            raise ValueError("max_request_attempts must be at least 1")
+        if retry_backoff_seconds < 0:
+            raise ValueError("retry_backoff_seconds must be non-negative")
         self._user_agent = user_agent
         self._timeout = timeout
+        self._max_request_attempts = max_request_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
         self.rate_limiter = RateLimiter(min_interval_seconds=min_interval_seconds)
         self._client: httpx.Client | None = None
         self._ticker_map: dict[str, str] | None = None
@@ -333,17 +392,36 @@ class SECEdgarProvider:
             )
         return self._client
 
+    def _get_response(self, url: str) -> httpx.Response:
+        """GET with bounded retry for transport failures and server errors."""
+        for attempt in range(self._max_request_attempts):
+            self.rate_limiter.acquire()
+            try:
+                response = self._get_client().get(url)
+            except httpx.RequestError as exc:
+                if attempt + 1 == self._max_request_attempts:
+                    raise ProviderError(f"SEC EDGAR request failed: {exc}") from exc
+            else:
+                if response.status_code == 429:
+                    raise RateLimitError("SEC EDGAR rate limit exceeded")
+                if 500 <= response.status_code < 600:
+                    if attempt + 1 == self._max_request_attempts:
+                        raise ProviderError(
+                            f"SEC EDGAR returned HTTP {response.status_code} for {url}"
+                        )
+                elif response.status_code != 200:
+                    raise ProviderError(f"SEC EDGAR returned HTTP {response.status_code} for {url}")
+                else:
+                    return response
+
+            delay = self._retry_backoff_seconds * (2**attempt)
+            if delay > 0:
+                time.sleep(delay)
+
+        raise AssertionError("SEC EDGAR retry loop exhausted without returning or raising")
+
     def _get_json(self, url: str) -> Any:
-        self.rate_limiter.acquire()
-        try:
-            response = self._get_client().get(url)
-        except httpx.RequestError as exc:
-            raise ProviderError(f"SEC EDGAR request failed: {exc}") from exc
-        if response.status_code == 429:
-            raise RateLimitError("SEC EDGAR rate limit exceeded")
-        if response.status_code != 200:
-            raise ProviderError(f"SEC EDGAR returned HTTP {response.status_code} for {url}")
-        return response.json()
+        return self._get_response(url).json()
 
     # -- reference lookups ---------------------------------------------------
     def _tickers(self) -> dict[str, str]:
@@ -442,11 +520,93 @@ class SECEdgarProvider:
             accession_number=accession_number,
         )
 
+    def fetch_accession_text(
+        self,
+        cik: int | str,
+        accession_number: str,
+    ) -> str:
+        """Fetch one official complete-submission SGML payload."""
+        return self._get_text(complete_submission_url(cik, accession_number))
+
+    def get_corporate_actions(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+    ) -> list[dict[str, Any]]:
+        """Extract explicitly disclosed split and dividend evidence.
+
+        Candidate 8-K filings are searched from a bounded pre-window lookback
+        because a declared action can become effective after its filing date.
+        Returned rows are included only when an explicit action date, or as a
+        last resort the filing date, lies inside the inclusive requested range.
+        Missing ex-dates and other facts remain ``None``; no calendar dates are
+        inferred from SEC record or payment dates.
+        """
+        if end < start:
+            raise ValueError(f"end ({end}) must be on or after start ({start})")
+
+        from liq.data.providers.sec_edgar_actions import (
+            EdgarMarkupError,
+            action_range_match_basis,
+            extract_pdf_text,
+            parse_edgar_corporate_actions,
+        )
+
+        filing_start = start - timedelta(days=CORPORATE_ACTION_FILING_LOOKBACK_DAYS)
+        events = self.fetch_8k_events(
+            [symbol],
+            start=filing_start,
+            end=end,
+            item_types=CORPORATE_ACTION_8K_ITEMS,
+        )
+        actions: list[dict[str, Any]] = []
+        for event in events.rows(named=True):
+            event_cik = str(event["cik"])
+            event_accession = str(event["accession_number"])
+            submission_text = self.fetch_accession_text(
+                event_cik,
+                event_accession,
+            )
+
+            def resolve_pdf_text(
+                document: EdgarFilingDocument,
+                *,
+                cik: str = event_cik,
+                accession: str = event_accession,
+            ) -> str:
+                if document.filename is None:
+                    raise EdgarMarkupError("SEC PDF attachment is missing its filename")
+                url = sec_archive_document_url(
+                    cik,
+                    accession,
+                    document.filename,
+                )
+                return extract_pdf_text(self._get_response(url).content)
+
+            try:
+                parsed = parse_edgar_corporate_actions(
+                    submission_text,
+                    symbol=str(event["symbol"]),
+                    cik=str(event["cik"]),
+                    filing_date=event["filing_date"],
+                    acceptance_datetime=event["acceptance_datetime"],
+                    accession_number=event_accession,
+                    pdf_text_resolver=resolve_pdf_text,
+                )
+            except EdgarMarkupError as exc:
+                raise ProviderError(
+                    "SEC EDGAR corporate-action parse failed for accession "
+                    f"{event_accession}: {exc}"
+                ) from exc
+            for action in parsed:
+                basis = action_range_match_basis(action, start=start, end=end)
+                if basis is not None:
+                    actions.append({**action, "range_match_basis": basis})
+        return actions
+
     def _get_text(self, url: str) -> str:
-        self.rate_limiter.acquire()
-        response = self._get_client().get(url)
-        response.raise_for_status()
-        return response.text
+        return self._get_response(url).text
 
     def fetch_form4_purchases(
         self,

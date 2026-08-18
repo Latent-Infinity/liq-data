@@ -152,6 +152,12 @@ class BaseProvider(ABC):
         """Default: not implemented. Override in adapters that support CA."""
         raise NotImplementedError(f"{type(self).__name__}.get_corporate_actions is not implemented")
 
+    def get_adjustment_factors(self, symbol: str, start: date, end: date) -> list[Any]:
+        """Default: not implemented. Override in adapters that support factors."""
+        raise NotImplementedError(
+            f"{type(self).__name__}.get_adjustment_factors is not implemented"
+        )
+
     def get_universe(self, asset_class: str, as_of: date | None = None) -> list[str]:
         """Default: not implemented. Override in adapters that expose a universe."""
         raise NotImplementedError(f"{type(self).__name__}.get_universe is not implemented")

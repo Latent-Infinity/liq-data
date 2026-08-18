@@ -11,6 +11,7 @@ import pytest
 
 from liq.data.exceptions import LockboxViolationError
 from liq.data.service import DataService
+from liq.data.settings import LiqDataSettings
 from liq.store import key_builder
 from liq.store.parquet import ParquetStore
 
@@ -905,6 +906,34 @@ class TestDataServiceGetProvider:
         with pytest.raises(ValueError, match="Unknown provider"):
             ds._get_provider("unknown_provider")
 
+    def test_get_provider_sec_edgar_uses_free_reference_factory(self, tmp_path: Path) -> None:
+        settings = LiqDataSettings(
+            data_root=tmp_path,
+            sec_edgar_user_agent="test test@example.com",
+        )
+
+        provider = DataService(settings=settings)._get_corporate_actions_provider("sec_edgar")
+
+        assert provider.name == "sec_edgar"
+
+    def test_corporate_actions_provider_is_reused_for_a_service_session(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(settings=LiqDataSettings(data_root=tmp_path))
+        provider = MagicMock()
+        factory = MagicMock(return_value=provider)
+
+        with patch.dict(
+            DataService._CORPORATE_ACTION_FACTORIES,
+            {"sec_edgar": factory},
+        ):
+            first = ds._get_corporate_actions_provider("sec_edgar")
+            second = ds._get_corporate_actions_provider("SEC_EDGAR")
+
+        assert first is provider
+        assert second is provider
+        factory.assert_called_once_with(ds.settings)
+
 
 class TestDataServiceImport:
     """Tests for DataService import from package."""
@@ -1030,6 +1059,87 @@ class TestDataServiceExtended:
         ):
             ds.fetch_corporate_actions(
                 "alpaca",
+                "AAPL",
+                start=date(2026, 1, 1),
+                end=date(2026, 1, 2),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+                asset_class="index_recon_book",
+            )
+
+        get_provider.assert_not_called()
+
+    def test_sec_edgar_corporate_actions_use_index_recon_lockbox_before_provider_access(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="program lockbox"),
+        ):
+            ds.fetch_corporate_actions(
+                "sec_edgar",
+                "AAPL",
+                start=date(2026, 1, 1),
+                end=date(2026, 1, 2),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+                asset_class="index_recon_book",
+            )
+
+        get_provider.assert_not_called()
+
+    def test_declared_adjustment_factors_fetch_routes_through_guard(self, tmp_path: Path) -> None:
+        """Adjustment reference reads use the same frozen-fold guard."""
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.get_adjustment_factors.return_value = [{"price_factor": 0.5}]
+
+        with (
+            patch.object(ds, "_guard_research_read") as guard,
+            patch.object(ds, "_get_provider", return_value=provider),
+        ):
+            result = ds.fetch_adjustment_factors(
+                "databento",
+                "AAPL",
+                start=date(2018, 5, 1),
+                end=date(2024, 12, 31),
+                purpose="discovery",
+                arm_id="index_reconstitution",
+                asset_class="index_recon_book",
+            )
+
+        assert result == [{"price_factor": 0.5}]
+        guard.assert_called_once_with(
+            "databento",
+            "AAPL",
+            date(2018, 5, 1),
+            date(2024, 12, 31),
+            purpose="discovery",
+            arm_id="index_reconstitution",
+            final_portfolio_review=False,
+            asset_class="index_recon_book",
+            data_kind="adjustment_factors",
+        )
+        provider.get_adjustment_factors.assert_called_once_with(
+            "AAPL", date(2018, 5, 1), date(2024, 12, 31)
+        )
+
+    def test_adjustment_factors_guard_rejects_before_provider_access(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(
+                ds,
+                "_guard_research_read",
+                side_effect=LockboxViolationError("blocked"),
+            ),
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="blocked"),
+        ):
+            ds.fetch_adjustment_factors(
+                "databento",
                 "AAPL",
                 start=date(2026, 1, 1),
                 end=date(2026, 1, 2),

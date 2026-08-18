@@ -81,6 +81,17 @@ to the filing accession and never falls back to the current ticker map. Missing
 or multiple filing symbols remain explicit for downstream exclusion and
 coverage reporting.
 
+`SECEdgarProvider.get_corporate_actions` conservatively extracts explicitly
+disclosed cash dividends and stock splits from candidate 8-K documents. It
+retains accession, document, and evidence hashes; never infers an ex-date; and
+skips SEC-typed ZIP, GRAPHIC, and EXCEL packaging attachments. Potentially
+action-bearing PDF exhibits are fetched from their standalone SEC archive URL,
+verified by PDF magic, and converted with `pdftotext -layout`; install Poppler's
+`pdftotext` executable before using this method. Missing, malformed, empty, or
+timed-out PDF extraction and unsupported textual markup fail closed. Declared
+research calls through `DataService.fetch_corporate_actions` share the arm's
+lockbox governance.
+
 `resolve_edgar_event_clock` converts a timezone-aware SEC acceptance timestamp
 into the XNYS session bucket, public/event timestamps, reaction-window end, and
 latency decision timestamps. Before-open, after-close, weekend, and holiday

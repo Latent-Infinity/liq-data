@@ -99,6 +99,9 @@ class MockMarketDataProvider:
     def get_corporate_actions(self, symbol: str, start: date, end: date) -> list[dict]:  # noqa: ARG002
         return []
 
+    def get_adjustment_factors(self, symbol: str, start: date, end: date) -> list[dict]:  # noqa: ARG002
+        return []
+
     def get_universe(self, asset_class: str, as_of: date | None = None) -> list[str]:  # noqa: ARG002
         return ["EUR_USD", "GBP_USD"]
 

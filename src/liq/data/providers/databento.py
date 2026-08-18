@@ -35,10 +35,10 @@ Design notes
   duration_ms, sync_run_id``. The record uses ``extra=`` so the fields
   are queryable attributes on the ``LogRecord`` rather than baked into
   the message.
-* **Network policy.** No real Databento call ever happens unless the
-  caller supplies a real ``databento.Historical`` instance. Tests
-  inject a fake client and never hit the network; the real-API smoke
-  test is opt-in via ``RUN_DATABENTO=1``.
+* **Network policy.** No real Databento call ever happens during
+  construction. Historical and Reference clients are built lazily.
+  Tests inject fake clients and never hit the network; the real-API
+  smoke test is opt-in via ``RUN_DATABENTO=1``.
 """
 
 from __future__ import annotations
@@ -734,6 +734,39 @@ def _same_databento_symbol(left: str, right: str) -> bool:
     return _databento_raw_symbol(left).upper() == _databento_raw_symbol(right).upper()
 
 
+def _normalize_reference_value(value: Any) -> Any:
+    """Convert pandas/numpy reference scalars into stable Python values."""
+    import pandas as pd  # noqa: PLC0415 - reference path only
+
+    if pd.api.types.is_scalar(value) and pd.isna(value):
+        return None
+    item = getattr(value, "item", None)
+    if callable(item):
+        value = item()
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
+def _reference_frame_to_records(frame: Any, *, index_name: str) -> list[dict[str, Any]]:
+    """Normalize a Databento Reference dataframe without dropping its index."""
+    if not hasattr(frame, "empty") or not hasattr(frame, "reset_index"):
+        raise DatabentoSchemaError("Databento Reference returned a non-dataframe response")
+    if frame.empty:
+        return []
+
+    reset = frame.reset_index()
+    if index_name not in reset.columns:
+        raise DatabentoSchemaError(
+            f"Databento Reference response missing index column {index_name!r}"
+        )
+    raw_records = reset.to_dict(orient="records")
+    return [
+        {str(key): _normalize_reference_value(value) for key, value in record.items()}
+        for record in raw_records
+    ]
+
+
 # ----- provider --------------------------------------------------------------
 
 
@@ -752,6 +785,9 @@ class DatabentoProvider(BaseProvider):
         client: Optional pre-built ``databento.Historical`` (or duck-
             typed fake for tests). Production code passes ``None`` and
             the provider builds a real client lazily.
+        reference_client: Optional pre-built ``databento.Reference`` (or
+            duck-typed fake for tests). Production code builds it lazily
+            only when reference data is requested.
         store: Optional ``TimeSeriesStore`` for symbology persistence.
             When ``None``, symbology rows are computed and logged but
             **not** persisted (useful for short-lived ad-hoc fetches).
@@ -769,6 +805,7 @@ class DatabentoProvider(BaseProvider):
         asset_class: str = "equity",
         batch_threshold_days: int = DATABENTO_BATCH_THRESHOLD_DAYS,
         client: Any | None = None,
+        reference_client: Any | None = None,
         store: TimeSeriesStore | None = None,
         max_retry_attempts: int = DATABENTO_DEFAULT_MAX_RETRY_ATTEMPTS,
         backoff_base_seconds: float = DATABENTO_DEFAULT_BACKOFF_BASE_SECONDS,
@@ -786,6 +823,7 @@ class DatabentoProvider(BaseProvider):
         self.asset_class = asset_class
         self.batch_threshold_days = batch_threshold_days
         self._client = client
+        self._reference_client = reference_client
         self._store = store
         self.max_retry_attempts = max_retry_attempts
         self.backoff_base_seconds = backoff_base_seconds
@@ -889,6 +927,70 @@ class DatabentoProvider(BaseProvider):
             },
         )
         return df
+
+    # ----- reference data ----------------------------------------------
+
+    def get_corporate_actions(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+    ) -> list[dict[str, Any]]:
+        """Fetch point-in-time corporate-action records for one US equity.
+
+        Databento filters ``end`` exclusively, while the LIQ provider contract
+        is inclusive. The request therefore advances ``end`` by one day. All
+        event revisions are retained with ``pit=True``; downstream coverage
+        code must adjudicate revisions rather than silently selecting one.
+        """
+        self._validate_reference_range(symbol, start, end)
+        client = self._get_reference_client()
+        frame = self._call_with_retry(
+            lambda: client.corporate_actions.get_range(
+                start=start,
+                end=end + timedelta(days=1),
+                index="event_date",
+                symbols=[_databento_raw_symbol(symbol)],
+                stype_in="raw_symbol",
+                countries=["US"],
+                flatten=True,
+                pit=True,
+            ),
+            sync_run_id=str(uuid4()),
+            dataset="REFERENCE.CORPORATE_ACTIONS",
+            symbol=symbol,
+            request_kind="reference_get_range",
+        )
+        records = _reference_frame_to_records(frame, index_name="event_date")
+        for record in records:
+            event = record.get("event")
+            if event is not None:
+                record.setdefault("corporate_action_type", str(event))
+        return records
+
+    def get_adjustment_factors(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+    ) -> list[dict[str, Any]]:
+        """Fetch adjustment factors for one US equity over an inclusive range."""
+        self._validate_reference_range(symbol, start, end)
+        client = self._get_reference_client()
+        frame = self._call_with_retry(
+            lambda: client.adjustment_factors.get_range(
+                start=start,
+                end=end + timedelta(days=1),
+                symbols=[_databento_raw_symbol(symbol)],
+                stype_in="raw_symbol",
+                countries=["US"],
+            ),
+            sync_run_id=str(uuid4()),
+            dataset="REFERENCE.ADJUSTMENT_FACTORS",
+            symbol=symbol,
+            request_kind="reference_get_range",
+        )
+        return _reference_frame_to_records(frame, index_name="ex_date")
 
     # ----- external batch orchestration ---------------------------------
 
@@ -1231,6 +1333,22 @@ class DatabentoProvider(BaseProvider):
 
         self._client = databento.Historical(key=self._api_key)
         return self._client
+
+    def _get_reference_client(self) -> Any:
+        if self._reference_client is not None:
+            return self._reference_client
+        # Reference construction is local; endpoint access remains lazy.
+        import databento  # noqa: PLC0415
+
+        self._reference_client = databento.Reference(key=self._api_key)
+        return self._reference_client
+
+    @staticmethod
+    def _validate_reference_range(symbol: str, start: date, end: date) -> None:
+        if not symbol:
+            raise ValueError("symbol must be non-empty")
+        if end < start:
+            raise ValueError(f"end ({end}) must be >= start ({start})")
 
     def _invoke_remote(
         self,

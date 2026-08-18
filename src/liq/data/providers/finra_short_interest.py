@@ -41,6 +41,7 @@ SHORT_INTEREST_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "prev_short_interest": pl.Int64,
     "avg_daily_volume": pl.Int64,
     "days_to_cover": pl.Float64,
+    "revision_flag": pl.String,
     "change_pct": pl.Float64,
     "change_shares": pl.Int64,
 }
@@ -54,6 +55,7 @@ _COLUMN_MAP = {
     "previousShortPositionQuantity": "prev_short_interest",
     "averageDailyVolumeQuantity": "avg_daily_volume",
     "daysToCoverQuantity": "days_to_cover",
+    "revisionFlag": "revision_flag",
     "changePercent": "change_pct",
     "changePreviousNumber": "change_shares",
 }

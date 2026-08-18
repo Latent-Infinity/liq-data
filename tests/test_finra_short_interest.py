@@ -22,7 +22,7 @@ from liq.data.providers.finra_short_interest import (
 )
 
 _SAMPLE = """accountingYearMonthNumber|symbolCode|issueName|issuerServicesGroupExchangeCode|marketClassCode|currentShortPositionQuantity|previousShortPositionQuantity|stockSplitFlag|averageDailyVolumeQuantity|daysToCoverQuantity|revisionFlag|changePercent|changePreviousNumber|settlementDate
-20241231|A|Agilent Technologies Inc.|A|NYSE|2911097|3151214||1523270|1.91||-7.62|-240117|2024-12-31
+20241231|A|Agilent Technologies Inc.|A|NYSE|2911097|3151214||1523270|1.91|Y|-7.62|-240117|2024-12-31
 20241231|AA|Alcoa Corporation|A|NYSE|8240146|8328174||3445012|2.39||-1.06|-88028|2024-12-31
 20241231|AAA|Alternative Access First Prior|E|ARCA|29509|19404||17436|1.69||52.08|10105|2024-12-31
 20241231|AAAU|Goldman Sachs Physical Gold ET|H|BZX|643889|328481||1679326|1.00||96.02|315408|2024-12-31"""
@@ -52,6 +52,7 @@ class TestParseShortInterest:
         assert row["change_pct"] == pytest.approx(-7.62)
         assert row["change_shares"] == -240117
         assert row["market"] == "NYSE"
+        assert row["revision_flag"] == "Y"
 
     def test_keyed_by_supplied_dates_and_sorted(self) -> None:
         df = _parsed()

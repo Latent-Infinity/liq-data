@@ -14,6 +14,7 @@ Features:
 """
 
 import logging
+import random
 import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
@@ -95,6 +96,10 @@ class TradeStationProvider(BaseProvider):
     # (barsback × interval_minutes). Hit empirically as HTTP 400 with message
     # "Request exceeds history limit: a maximum of 500000 intraday minutes ...".
     INTRADAY_MINUTE_LIMIT_PER_REQUEST = 500_000
+    # Positive jitter avoids synchronized retries without retrying before a
+    # provider-declared reset. Cap it so long reset windows stay predictable.
+    RETRY_JITTER_RATIO = 0.1
+    RETRY_MAX_JITTER_SECONDS = 1.0
 
     def __init__(
         self,
@@ -113,7 +118,8 @@ class TradeStationProvider(BaseProvider):
             refresh_token: OAuth2 refresh token (required)
             timeout: Request timeout in seconds (default: 30)
             retry_base_delay_s: Initial backoff delay for ``RateLimitError`` retries.
-                Doubles after each retry. Tests should pass 0.0 to skip waiting.
+                Doubles after each retry and receives bounded positive jitter.
+                Tests should pass 0.0 to skip waiting.
             retry_max_attempts: Number of *retries* after a ``RateLimitError``
                 (so total attempts = retry_max_attempts + 1). 0 disables retry.
 
@@ -336,10 +342,11 @@ class TradeStationProvider(BaseProvider):
     ) -> dict[str, Any]:
         """Wrap _make_request with exponential backoff on RateLimitError.
 
-        Total attempts = ``self._retry_max_attempts + 1``. Delay doubles each retry
-        starting at ``self._retry_base_delay_s``. When retries are exhausted the
-        last ``RateLimitError`` propagates. Pass ``retry_base_delay_s=0`` in tests
-        to skip waiting.
+        Total attempts = ``self._retry_max_attempts + 1``. Fallback delay doubles
+        each retry starting at ``self._retry_base_delay_s``. Provider reset delays
+        take precedence. Both receive bounded positive jitter. When retries are
+        exhausted the last ``RateLimitError`` propagates. Pass
+        ``retry_base_delay_s=0`` in tests to skip waiting.
         """
         delay = self._retry_base_delay_s
         for attempt in range(self._retry_max_attempts + 1):
@@ -349,11 +356,10 @@ class TradeStationProvider(BaseProvider):
                 if attempt == self._retry_max_attempts:
                     raise
                 retry_after_s = (
-                    error.retry_after_s
-                    if isinstance(error, _TradeStationRateLimitError)
-                    else None
+                    error.retry_after_s if isinstance(error, _TradeStationRateLimitError) else None
                 )
-                wait_s = retry_after_s if retry_after_s is not None else delay
+                base_wait_s = retry_after_s if retry_after_s is not None else delay
+                wait_s = self._jittered_retry_wait(base_wait_s)
                 if wait_s > 0:
                     logger.warning(
                         "TradeStation rate limited; waiting %.3f seconds before retry",
@@ -363,6 +369,16 @@ class TradeStationProvider(BaseProvider):
                 delay *= 2
         # Unreachable — loop either returns or raises.
         raise RateLimitError("TradeStation rate limit exceeded after retries")
+
+    def _jittered_retry_wait(self, base_wait_s: float) -> float:
+        """Add bounded positive jitter without retrying before the base delay."""
+        if base_wait_s <= 0:
+            return 0.0
+        jitter_cap_s = min(
+            base_wait_s * self.RETRY_JITTER_RATIO,
+            self.RETRY_MAX_JITTER_SECONDS,
+        )
+        return base_wait_s + random.uniform(0.0, jitter_cap_s)
 
     def _safe_bars_per_request(self, timeframe: str) -> int:
         """Bars to request per single API call honoring Tradestation's limits.
@@ -463,9 +479,28 @@ class TradeStationProvider(BaseProvider):
             if not bars:
                 break
 
+            parsed_bars = [
+                (
+                    bar,
+                    datetime.fromisoformat(bar["TimeStamp"].replace("Z", "+00:00")),
+                )
+                for bar in bars
+            ]
+            earliest = min(timestamp for _, timestamp in parsed_bars)
+            next_end = earliest - timedelta(seconds=1)
+
+            # TradeStation can repeat a daily boundary bar whose timestamp is
+            # later than the requested lastdate. Stop before appending that
+            # page; otherwise current_end never moves and the loop exhausts the
+            # provider quota while duplicating the same timestamp.
+            if next_end >= current_end:
+                logger.warning(
+                    "TradeStation pagination made no backward progress; stopping page traversal"
+                )
+                break
+
             # Parse and filter bars
-            for bar in bars:
-                ts = datetime.fromisoformat(bar["TimeStamp"].replace("Z", "+00:00"))
+            for bar, ts in parsed_bars:
                 if ts < start_dt:
                     continue
 
@@ -480,17 +515,12 @@ class TradeStationProvider(BaseProvider):
                     }
                 )
 
-            # Find earliest timestamp for next pagination
-            earliest = min(
-                datetime.fromisoformat(b["TimeStamp"].replace("Z", "+00:00")) for b in bars
-            )
-
             # If we've gotten all the data we need, stop
             if earliest <= start_dt:
                 break
 
             # Move to earlier period
-            current_end = earliest - timedelta(seconds=1)
+            current_end = next_end
 
         return self.bars_to_dataframe(all_bars)
 

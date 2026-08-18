@@ -382,6 +382,60 @@ class TestTradeStationProviderPagination:
         # Should have bars from multiple paginated requests
         assert len(result) >= 2
 
+    @respx.mock
+    def test_pagination_stops_when_boundary_page_makes_no_backward_progress(
+        self,
+        tradestation_provider: TradeStationProvider,
+        mock_token_response: dict,
+    ) -> None:
+        """A repeated boundary bar must not loop, duplicate, or exhaust quota."""
+        respx.post("https://signin.tradestation.com/oauth/token").mock(
+            return_value=httpx.Response(200, json=mock_token_response)
+        )
+        first_page = {
+            "Bars": [
+                {
+                    "High": "10",
+                    "Low": "9",
+                    "Open": "9.5",
+                    "Close": "9.75",
+                    "TimeStamp": "2024-09-24T20:00:00Z",
+                    "TotalVolume": "100",
+                },
+                {
+                    "High": "11",
+                    "Low": "10",
+                    "Open": "10.5",
+                    "Close": "10.75",
+                    "TimeStamp": "2024-09-25T20:00:00Z",
+                    "TotalVolume": "200",
+                },
+            ]
+        }
+        repeated_boundary = {"Bars": [first_page["Bars"][0]]}
+        requested_lastdates: list[str | None] = []
+
+        def _repeat_boundary(request: httpx.Request) -> httpx.Response:
+            requested_lastdates.append(request.url.params.get("lastdate"))
+            if len(requested_lastdates) == 1:
+                return httpx.Response(200, json=first_page)
+            if len(requested_lastdates) == 2:
+                return httpx.Response(200, json=repeated_boundary)
+            raise AssertionError("pagination retried a page that made no backward progress")
+
+        respx.get(url__regex=r".*/marketdata/barcharts/NEW.*").mock(side_effect=_repeat_boundary)
+
+        result = tradestation_provider.fetch_bars(
+            "NEW", date(2021, 6, 15), date(2025, 12, 31), timeframe="1d"
+        )
+
+        assert requested_lastdates == [
+            "2025-12-31T23:59:59Z",
+            "2024-09-24T19:59:59Z",
+        ]
+        assert len(result) == 2
+        assert result["timestamp"].n_unique() == 2
+
 
 class TestTradeStationProviderIntradayLimits:
     """Tests for the 500k-minute-per-request intraday limit handling."""
@@ -419,9 +473,10 @@ class TestTradeStationProviderIntradayLimits:
         start = date(2021, 6, 15)
         end = date(2025, 12, 31)
 
-        assert tradestation_provider._bars_per_request_for_window("1d", start, end) == (
-            end - start
-        ).days + 1
+        assert (
+            tradestation_provider._bars_per_request_for_window("1d", start, end)
+            == (end - start).days + 1
+        )
 
     def test_weekly_window_request_has_boundary_cushion(
         self,
@@ -609,13 +664,15 @@ class TestTradeStationProviderRateLimitBackoff:
         ]
         respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(side_effect=responses)
 
-        with patch("liq.data.providers.tradestation.time.sleep") as sleep:
-            provider.fetch_bars(
-                "AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1d"
-            )
+        with (
+            patch("liq.data.providers.tradestation.random.uniform", return_value=0.75) as jitter,
+            patch("liq.data.providers.tradestation.time.sleep") as sleep,
+        ):
+            provider.fetch_bars("AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1d")
 
-        sleep.assert_called_once_with(287.0)
-        assert "waiting 287.000 seconds" in caplog.text
+        jitter.assert_called_once_with(0.0, 1.0)
+        sleep.assert_called_once_with(287.75)
+        assert "waiting 287.750 seconds" in caplog.text
 
     @respx.mock
     def test_invalid_reset_header_uses_exponential_fallback(
@@ -642,12 +699,51 @@ class TestTradeStationProviderRateLimitBackoff:
         ]
         respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(side_effect=responses)
 
-        with patch("liq.data.providers.tradestation.time.sleep") as sleep:
-            provider.fetch_bars(
-                "AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1d"
-            )
+        with (
+            patch("liq.data.providers.tradestation.random.uniform", return_value=0.1) as jitter,
+            patch("liq.data.providers.tradestation.time.sleep") as sleep,
+        ):
+            provider.fetch_bars("AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1d")
 
-        sleep.assert_called_once_with(1.0)
+        jitter.assert_called_once_with(0.0, 0.1)
+        sleep.assert_called_once_with(1.1)
+
+    @respx.mock
+    def test_fallback_backoff_remains_exponential_with_jitter(
+        self,
+        mock_token_response: dict,
+    ) -> None:
+        provider = TradeStationProvider(
+            client_id="test_client_id",
+            client_secret="test_client_secret",
+            refresh_token="test_refresh_token",
+            retry_base_delay_s=1.0,
+            retry_max_attempts=2,
+        )
+        respx.post("https://signin.tradestation.com/oauth/token").mock(
+            return_value=httpx.Response(200, json=mock_token_response)
+        )
+        responses = [
+            httpx.Response(429, json={"error": "rate_limit_exceeded"}),
+            httpx.Response(429, json={"error": "rate_limit_exceeded"}),
+            httpx.Response(200, json={"Bars": []}),
+        ]
+        respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(side_effect=responses)
+
+        with (
+            patch(
+                "liq.data.providers.tradestation.random.uniform",
+                side_effect=[0.1, 0.2],
+            ) as jitter,
+            patch("liq.data.providers.tradestation.time.sleep") as sleep,
+        ):
+            provider.fetch_bars("AAPL", date(2024, 1, 1), date(2024, 1, 31), timeframe="1d")
+
+        assert jitter.call_args_list == [
+            ((0.0, 0.1),),
+            ((0.0, 0.2),),
+        ]
+        assert sleep.call_args_list == [((1.1,),), ((2.2,),)]
 
     @respx.mock
     def test_rate_limit_exhausts_retries_then_raises(

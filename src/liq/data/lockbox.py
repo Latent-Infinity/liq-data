@@ -82,7 +82,7 @@ class LockboxLedger:
 # recent out-of-sample validation year. Prior arms characterized on their earlier
 # sub-windows remain valid; the change applies to new pre-registrations only.
 INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
-    version="intraday_campaign_v1.2",
+    version="intraday_campaign_v1.3",
     datasets=MappingProxyType(
         {
             "spy_qqq_ladder_tradestation": FoldWindows(
@@ -104,6 +104,13 @@ INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
                 discovery=(date(2017, 1, 1), date(2024, 12, 31)),
                 validation=(date(2025, 1, 1), date(2025, 12, 31)),
                 lockbox_start=date(2026, 1, 1),
+            ),
+            # Non-signal Path D availability audit authorized 2026-08-17.
+            # This does not assign discovery/validation folds or authorize a
+            # signal-bearing read; only timestamp-level bar coverage may use it.
+            "short_interest_bar_coverage": FoldWindows(
+                characterization=(date(2021, 6, 15), date(2025, 12, 31)),
+                allowed_purposes=frozenset({"characterization"}),
             ),
             "tradestation_cohort_1m": FoldWindows(
                 discovery=(date(2019, 1, 1), date(2024, 12, 31)),
@@ -187,7 +194,9 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
     An ``"index_recon_book"`` read resolves to the index-reconstitution
     dataset from its daily-bar or corporate-actions providers (TradeStation,
     Databento, Alpaca, or SEC EDGAR) so every source shares its fold governance. Any
-    other asset class keeps the equity-bars mapping.
+    other asset class keeps the equity-bars mapping. A
+    ``"short_interest_book"`` TradeStation read resolves to the dedicated
+    non-signal bar-coverage dataset.
 
     Returns ``None`` for providers outside the campaign ledger (their reads
     are not fold-governed).
@@ -200,6 +209,8 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
             return "month_end_spy_agg"
         if asset_class == "index_recon_book":
             return "index_recon_sp500"
+        if asset_class == "short_interest_book":
+            return "short_interest_bar_coverage"
         if symbol.upper() in _LADDER_SYMBOLS:
             return "spy_qqq_ladder_tradestation"
         return "tradestation_cohort_1m"

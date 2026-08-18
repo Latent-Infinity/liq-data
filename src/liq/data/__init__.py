@@ -42,7 +42,7 @@ from liq.data.providers import (
     OandaProvider,
 )
 from liq.data.retry import async_retry, retry
-from liq.data.service import DataService
+from liq.data.service import BarCoverageObservation, DataService
 from liq.data.settings import (
     LiqDataSettings,
     create_binance_provider,
@@ -70,6 +70,7 @@ __all__ = [
     "DatabentoProvider",
     # Service API
     "DataService",
+    "BarCoverageObservation",
     # Ingestion utilities
     "DataFetcher",
     "AsyncDataFetcher",

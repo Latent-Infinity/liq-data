@@ -37,6 +37,7 @@ class TestLedger:
             "spy_qqq_ladder_tradestation",
             "month_end_spy_agg",
             "index_recon_sp500",
+            "short_interest_bar_coverage",
             "tradestation_cohort_1m",
             "oanda_fx",
             "binance_spot",
@@ -149,6 +150,56 @@ class TestIndexReconDataset:
                 date(2026, 1, 1),
                 purpose="validation",
                 arm_id="index_reconstitution",
+            )
+
+
+class TestShortInterestBarCoverageDataset:
+    def test_short_interest_book_routes_to_dedicated_dataset(self) -> None:
+        assert (
+            resolve_dataset("tradestation", "OLD", asset_class="short_interest_book")
+            == "short_interest_bar_coverage"
+        )
+
+    def test_short_interest_book_has_only_authorized_characterization_window(self) -> None:
+        windows = INTRADAY_CAMPAIGN_LEDGER_V1.datasets["short_interest_bar_coverage"]
+
+        assert windows.characterization == (date(2021, 6, 15), date(2025, 12, 31))
+        assert windows.allowed_purposes == frozenset({"characterization"})
+        assert windows.discovery is None
+        assert windows.validation is None
+        assert windows.lockbox_start is None
+
+    def test_short_interest_characterization_window_is_admitted(
+        self, guard: LockboxGuard
+    ) -> None:
+        guard.assert_period_allowed(
+            "short_interest_bar_coverage",
+            date(2021, 6, 15),
+            date(2025, 12, 31),
+            purpose="characterization",
+            arm_id="path_d_short_interest",
+        )
+
+    def test_short_interest_dataset_rejects_discovery(self, guard: LockboxGuard) -> None:
+        with pytest.raises(LockboxViolationError, match="only admits purposes"):
+            guard.assert_period_allowed(
+                "short_interest_bar_coverage",
+                date(2021, 6, 15),
+                date(2024, 12, 31),
+                purpose="discovery",
+                arm_id="path_d_short_interest",
+            )
+
+    def test_short_interest_dataset_rejects_out_of_window_read(
+        self, guard: LockboxGuard
+    ) -> None:
+        with pytest.raises(LockboxViolationError, match="outside the characterization window"):
+            guard.assert_period_allowed(
+                "short_interest_bar_coverage",
+                date(2021, 6, 14),
+                date(2025, 12, 31),
+                purpose="characterization",
+                arm_id="path_d_short_interest",
             )
 
 

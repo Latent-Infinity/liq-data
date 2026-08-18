@@ -1,5 +1,6 @@
 """Tests for DataService programmatic API."""
 
+import json
 import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -9,8 +10,8 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-from liq.data.exceptions import LockboxViolationError
-from liq.data.service import DataService
+from liq.data.exceptions import LockboxViolationError, SchemaValidationError
+from liq.data.service import BarCoverageObservation, DataService
 from liq.data.settings import LiqDataSettings
 from liq.store import key_builder
 from liq.store.parquet import ParquetStore
@@ -1185,6 +1186,254 @@ class TestDataServiceExtended:
         symbols = ds.list_symbols()
 
         assert {"provider": "oanda", "symbol": "EUR_USD", "timeframe": "1m"} in symbols
+
+
+class TestDataServiceBarCoverageProbe:
+    """The Path D coverage API exposes timestamps, never price or volume values."""
+
+    START = date(2021, 6, 15)
+    END = date(2025, 12, 31)
+    ARM = "path_d_short_interest"
+
+    @staticmethod
+    def _bars() -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "timestamp": [
+                    datetime(2021, 6, 15, tzinfo=UTC),
+                    datetime(2021, 6, 15, tzinfo=UTC),
+                    datetime(2025, 12, 31, tzinfo=UTC),
+                    datetime(2026, 1, 2, tzinfo=UTC),
+                ],
+                "open": [10.0, 10.0, 20.0, 30.0],
+                "high": [11.0, 11.0, 21.0, 31.0],
+                "low": [9.0, 9.0, 19.0, 29.0],
+                "close": [10.5, 10.5, 20.5, 30.5],
+                "volume": [100.0, 100.0, 200.0, 300.0],
+            }
+        )
+
+    def test_probe_returns_only_timestamp_coverage_metadata(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.fetch_bars.return_value = self._bars()
+
+        with patch.object(ds, "_get_provider", return_value=provider):
+            observation = ds.probe_bar_coverage(
+                "tradestation",
+                "OLD",
+                self.START,
+                self.END,
+                timeframe="1d",
+                purpose="characterization",
+                arm_id=self.ARM,
+                asset_class="short_interest_book",
+            )
+
+        assert isinstance(observation, BarCoverageObservation)
+        assert observation.row_count == 4
+        assert observation.unique_timestamp_count == 3
+        assert observation.duplicate_timestamp_count == 1
+        assert observation.outside_requested_window_count == 1
+        assert observation.first_timestamp == "2021-06-15T00:00:00+00:00"
+        assert observation.last_timestamp == "2026-01-02T00:00:00+00:00"
+        payload = observation.to_dict()
+        assert set(payload) == {
+            "provider",
+            "symbol",
+            "timeframe",
+            "requested_start",
+            "requested_end",
+            "row_count",
+            "unique_timestamp_count",
+            "duplicate_timestamp_count",
+            "outside_requested_window_count",
+            "first_timestamp",
+            "last_timestamp",
+            "timestamp_sha256",
+        }
+        assert not {"open", "high", "low", "close", "volume"} & payload.keys()
+        provider.fetch_bars.assert_called_once_with(
+            "OLD", self.START, self.END, timeframe="1d"
+        )
+        assert not list(tmp_path.rglob("*.parquet"))
+
+        log = json.loads((tmp_path / "lockbox_usage_log.jsonl").read_text().strip())
+        assert log["dataset"] == "short_interest_bar_coverage"
+        assert log["purpose"] == "characterization"
+        assert log["arm_id"] == self.ARM
+
+    def test_probe_empty_response_is_explicit(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.fetch_bars.return_value = pl.DataFrame()
+
+        with patch.object(ds, "_get_provider", return_value=provider):
+            observation = ds.probe_bar_coverage(
+                "tradestation",
+                "GONE",
+                self.START,
+                self.END,
+                timeframe="1d",
+                purpose="characterization",
+                arm_id=self.ARM,
+                asset_class="short_interest_book",
+            )
+
+        assert observation.row_count == 0
+        assert observation.first_timestamp is None
+        assert observation.last_timestamp is None
+
+    def test_probe_reuses_one_provider_session_across_symbols(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.fetch_bars.return_value = pl.DataFrame()
+
+        with patch.object(ds, "_get_provider", return_value=provider) as get_provider:
+            for symbol in ("GONE", "OLD"):
+                ds.probe_bar_coverage(
+                    "tradestation",
+                    symbol,
+                    self.START,
+                    self.END,
+                    timeframe="1d",
+                    purpose="characterization",
+                    arm_id=self.ARM,
+                    asset_class="short_interest_book",
+                )
+
+        get_provider.assert_called_once_with("tradestation")
+        assert provider.fetch_bars.call_count == 2
+
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            pl.DataFrame({"close": [1.0]}),
+            pl.DataFrame({"timestamp": [datetime(2021, 6, 15)]}),
+        ],
+    )
+    def test_probe_rejects_missing_or_naive_timestamps(
+        self, tmp_path: Path, frame: pl.DataFrame
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.fetch_bars.return_value = frame
+
+        with (
+            patch.object(ds, "_get_provider", return_value=provider),
+            pytest.raises(SchemaValidationError),
+        ):
+            ds.probe_bar_coverage(
+                "tradestation",
+                "OLD",
+                self.START,
+                self.END,
+                timeframe="1d",
+                purpose="characterization",
+                arm_id=self.ARM,
+                asset_class="short_interest_book",
+            )
+
+    @pytest.mark.parametrize("operation", ["fetch", "load"])
+    def test_ordinary_bar_read_is_rejected_before_data_access(
+        self, tmp_path: Path, operation: str
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="coverage probe only"),
+        ):
+            if operation == "fetch":
+                ds.fetch(
+                    "tradestation",
+                    "OLD",
+                    self.START,
+                    self.END,
+                    timeframe="1d",
+                    save=False,
+                    purpose="characterization",
+                    arm_id=self.ARM,
+                    asset_class="short_interest_book",
+                )
+            else:
+                ds.load(
+                    "tradestation",
+                    "OLD",
+                    "1d",
+                    start=self.START,
+                    end=self.END,
+                    purpose="characterization",
+                    arm_id=self.ARM,
+                    asset_class="short_interest_book",
+                )
+
+        get_provider.assert_not_called()
+
+    def test_short_interest_discriminator_cannot_omit_research_purpose(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="declared characterization purpose"),
+        ):
+            ds.fetch(
+                "tradestation",
+                "OLD",
+                self.START,
+                self.END,
+                timeframe="1d",
+                save=False,
+                asset_class="short_interest_book",
+            )
+
+        get_provider.assert_not_called()
+
+    def test_probe_rejects_non_daily_timeframe_before_provider_access(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="daily bars only"),
+        ):
+            ds.probe_bar_coverage(
+                "tradestation",
+                "OLD",
+                self.START,
+                self.END,
+                timeframe="1m",
+                purpose="characterization",
+                arm_id=self.ARM,
+                asset_class="short_interest_book",
+            )
+
+        get_provider.assert_not_called()
+
+    def test_probe_rejects_unapproved_provider_before_provider_access(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(LockboxViolationError, match="TradeStation only"),
+        ):
+            ds.probe_bar_coverage(
+                "databento",
+                "OLD",
+                self.START,
+                self.END,
+                timeframe="1d",
+                purpose="characterization",
+                arm_id=self.ARM,
+                asset_class="short_interest_book",
+            )
+
+        get_provider.assert_not_called()
 
 
 class TestDataServiceResearchReadAssetClass:

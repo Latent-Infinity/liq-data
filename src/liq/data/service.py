@@ -32,6 +32,7 @@ Example:
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import logging
 import threading
 import time
@@ -46,7 +47,7 @@ import polars as pl
 from filelock import FileLock, Timeout
 
 from liq.data.aggregation import aggregate_bars
-from liq.data.exceptions import LockboxViolationError, ProviderNoDataError
+from liq.data.exceptions import LockboxViolationError, ProviderNoDataError, SchemaValidationError
 from liq.data.gaps import detect_gaps
 from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, LockboxLedger, resolve_dataset
 from liq.data.policies import POLICIES
@@ -94,6 +95,83 @@ class _BatchSyncWork:
     symbol: str
     start: datetime
     end: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class BarCoverageObservation:
+    """Timestamp-only availability metadata from a provider bar response."""
+
+    provider: str
+    symbol: str
+    timeframe: str
+    requested_start: str
+    requested_end: str
+    row_count: int
+    unique_timestamp_count: int
+    duplicate_timestamp_count: int
+    outside_requested_window_count: int
+    first_timestamp: str | None
+    last_timestamp: str | None
+    timestamp_sha256: str
+
+    def to_dict(self) -> dict[str, str | int | None]:
+        """Return a JSON-safe record that cannot expose OHLCV values."""
+        return {
+            "provider": self.provider,
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "requested_start": self.requested_start,
+            "requested_end": self.requested_end,
+            "row_count": self.row_count,
+            "unique_timestamp_count": self.unique_timestamp_count,
+            "duplicate_timestamp_count": self.duplicate_timestamp_count,
+            "outside_requested_window_count": self.outside_requested_window_count,
+            "first_timestamp": self.first_timestamp,
+            "last_timestamp": self.last_timestamp,
+            "timestamp_sha256": self.timestamp_sha256,
+        }
+
+
+def _summarize_bar_coverage(
+    frame: pl.DataFrame,
+    *,
+    provider: str,
+    symbol: str,
+    timeframe: str,
+    start: date,
+    end: date,
+) -> BarCoverageObservation:
+    """Discard market values and summarize only returned UTC timestamps."""
+    if frame.is_empty():
+        timestamps: list[datetime] = []
+    else:
+        if "timestamp" not in frame.columns:
+            raise SchemaValidationError("Missing required column: timestamp")
+        timestamp_dtype = frame["timestamp"].dtype
+        if not isinstance(timestamp_dtype, pl.Datetime) or timestamp_dtype.time_zone is None:
+            raise SchemaValidationError("Timestamps must be timezone-aware")
+        timestamps = cast(
+            list[datetime],
+            frame["timestamp"].dt.convert_time_zone("UTC").sort().to_list(),
+        )
+
+    unique_count = len(set(timestamps))
+    outside_count = sum(value.date() < start or value.date() > end for value in timestamps)
+    canonical_timestamps = "\n".join(value.isoformat() for value in timestamps).encode()
+    return BarCoverageObservation(
+        provider=provider.lower(),
+        symbol=symbol.upper(),
+        timeframe=timeframe,
+        requested_start=start.isoformat(),
+        requested_end=end.isoformat(),
+        row_count=len(timestamps),
+        unique_timestamp_count=unique_count,
+        duplicate_timestamp_count=len(timestamps) - unique_count,
+        outside_requested_window_count=outside_count,
+        first_timestamp=timestamps[0].isoformat() if timestamps else None,
+        last_timestamp=timestamps[-1].isoformat() if timestamps else None,
+        timestamp_sha256=hashlib.sha256(canonical_timestamps).hexdigest(),
+    )
 
 
 class DataService:
@@ -149,6 +227,7 @@ class DataService:
         self._lockbox_ledger = lockbox_ledger
         self._lockbox_guard: LockboxGuard | None = None
         self._corporate_actions_provider_cache: dict[str, CorporateActionsProvider] = {}
+        self._bar_coverage_provider_cache: dict[str, MarketDataProvider] = {}
 
     @property
     def settings(self) -> LiqDataSettings:
@@ -195,6 +274,24 @@ class DataService:
         data_kind: str = "bars",
     ) -> None:
         """Route a declared-purpose read through the lockbox guard."""
+        if asset_class == "short_interest_book":
+            if provider.lower() != "tradestation":
+                raise LockboxViolationError(
+                    "short_interest_book coverage authorization admits TradeStation only"
+                )
+            if purpose is None:
+                raise LockboxViolationError(
+                    "short_interest_book coverage requires a declared characterization purpose"
+                )
+            if data_kind != "bar_coverage":
+                raise LockboxViolationError(
+                    "short_interest_book research access is a timestamp-only coverage probe only"
+                )
+            if timeframe != "1d":
+                raise LockboxViolationError(
+                    "short_interest_book coverage research reads admit daily bars only "
+                    "(timeframe='1d')"
+                )
         if purpose is None:
             return
         if asset_class == "index_recon_book" and data_kind == "bars" and timeframe != "1d":
@@ -564,6 +661,51 @@ class DataService:
             self._store.write(storage_key, df, mode=mode)
 
         return df
+
+    def probe_bar_coverage(
+        self,
+        provider: str,
+        symbol: str,
+        start: date,
+        end: date,
+        *,
+        timeframe: str,
+        purpose: str,
+        arm_id: str,
+        asset_class: str,
+    ) -> BarCoverageObservation:
+        """Fetch bars but expose only timestamp-level availability metadata.
+
+        This API intentionally has no save mode and never returns its provider
+        frame. It is suitable for governed coverage characterization where
+        market values must not reach the calling research harness.
+        """
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=False,
+            asset_class=asset_class,
+            timeframe=timeframe,
+            data_kind="bar_coverage",
+        )
+        normalized_provider = provider.lower()
+        coverage_provider = self._bar_coverage_provider_cache.get(normalized_provider)
+        if coverage_provider is None:
+            coverage_provider = self._get_provider(provider)
+            self._bar_coverage_provider_cache[normalized_provider] = coverage_provider
+        frame = coverage_provider.fetch_bars(symbol, start, end, timeframe=timeframe)
+        return _summarize_bar_coverage(
+            frame,
+            provider=provider,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+        )
 
     def fetch_quotes(
         self,

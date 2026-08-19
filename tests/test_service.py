@@ -1253,9 +1253,7 @@ class TestDataServiceBarCoverageProbe:
             "timestamp_sha256",
         }
         assert not {"open", "high", "low", "close", "volume"} & payload.keys()
-        provider.fetch_bars.assert_called_once_with(
-            "OLD", self.START, self.END, timeframe="1d"
-        )
+        provider.fetch_bars.assert_called_once_with("OLD", self.START, self.END, timeframe="1d")
         assert not list(tmp_path.rglob("*.parquet"))
 
         log = json.loads((tmp_path / "lockbox_usage_log.jsonl").read_text().strip())
@@ -1391,9 +1389,7 @@ class TestDataServiceBarCoverageProbe:
 
         get_provider.assert_not_called()
 
-    def test_probe_rejects_non_daily_timeframe_before_provider_access(
-        self, tmp_path: Path
-    ) -> None:
+    def test_probe_rejects_non_daily_timeframe_before_provider_access(self, tmp_path: Path) -> None:
         ds = DataService(data_root=tmp_path)
 
         with (
@@ -1413,9 +1409,7 @@ class TestDataServiceBarCoverageProbe:
 
         get_provider.assert_not_called()
 
-    def test_probe_rejects_unapproved_provider_before_provider_access(
-        self, tmp_path: Path
-    ) -> None:
+    def test_probe_rejects_unapproved_provider_before_provider_access(self, tmp_path: Path) -> None:
         ds = DataService(data_root=tmp_path)
 
         with (

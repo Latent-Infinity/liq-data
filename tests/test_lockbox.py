@@ -169,9 +169,7 @@ class TestShortInterestBarCoverageDataset:
         assert windows.validation is None
         assert windows.lockbox_start is None
 
-    def test_short_interest_characterization_window_is_admitted(
-        self, guard: LockboxGuard
-    ) -> None:
+    def test_short_interest_characterization_window_is_admitted(self, guard: LockboxGuard) -> None:
         guard.assert_period_allowed(
             "short_interest_bar_coverage",
             date(2021, 6, 15),
@@ -190,9 +188,7 @@ class TestShortInterestBarCoverageDataset:
                 arm_id="path_d_short_interest",
             )
 
-    def test_short_interest_dataset_rejects_out_of_window_read(
-        self, guard: LockboxGuard
-    ) -> None:
+    def test_short_interest_dataset_rejects_out_of_window_read(self, guard: LockboxGuard) -> None:
         with pytest.raises(LockboxViolationError, match="outside the characterization window"):
             guard.assert_period_allowed(
                 "short_interest_bar_coverage",

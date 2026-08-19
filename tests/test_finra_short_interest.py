@@ -6,6 +6,7 @@ The committed sample is the header and first four records from FINRA's official
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 
 import httpx
@@ -19,6 +20,7 @@ from liq.data.providers.finra_short_interest import (
     dissemination_date,
     parse_short_interest,
     settlement_dates,
+    short_interest_url,
 )
 
 _SAMPLE = """accountingYearMonthNumber|symbolCode|issueName|issuerServicesGroupExchangeCode|marketClassCode|currentShortPositionQuantity|previousShortPositionQuantity|stockSplitFlag|averageDailyVolumeQuantity|daysToCoverQuantity|revisionFlag|changePercent|changePreviousNumber|settlementDate
@@ -102,6 +104,25 @@ class TestSettlementDates:
 
 
 class TestProviderConstruction:
+    def test_official_archive_url_is_date_keyed(self) -> None:
+        assert short_interest_url(_SETTLE) == (
+            "https://cdn.finra.org/equity/otcmarket/biweekly/shrt20241231.csv"
+        )
+
+    def test_fetch_preserves_source_file_identity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = FINRAShortInterestProvider(
+            "Latent Infinity research@example.com", min_interval_seconds=0
+        )
+        monkeypatch.setattr(provider, "_get_text", lambda _url: _SAMPLE)
+
+        frame = provider.fetch_short_interest(_SETTLE)
+
+        assert frame["source_file_url"].unique().to_list() == [short_interest_url(_SETTLE)]
+        assert frame["source_file_sha256"].unique().to_list() == [
+            hashlib.sha256(_SAMPLE.encode()).hexdigest()
+        ]
+        assert frame["revision_flag"].to_list() == ["Y", None, None, None]
+
     def test_requires_contact_user_agent(self) -> None:
         with pytest.raises(ConfigurationError):
             FINRAShortInterestProvider("")

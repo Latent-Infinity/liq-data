@@ -17,6 +17,7 @@ settlement-to-dissemination logic is date-driven rather than tied to a file coun
 
 from __future__ import annotations
 
+import hashlib
 import io
 from datetime import date, timedelta
 
@@ -60,6 +61,11 @@ _COLUMN_MAP = {
     "changePreviousNumber": "change_shares",
 }
 _INT_COLS = ("short_interest", "prev_short_interest", "avg_daily_volume", "change_shares")
+
+
+def short_interest_url(settlement_date: date) -> str:
+    """Return the official FINRA historical-file URL for one settlement date."""
+    return _CDN_URL.format(yyyymmdd=settlement_date.strftime("%Y%m%d"))
 
 
 def dissemination_date(settlement_date: date) -> date:
@@ -161,10 +167,13 @@ class FINRAShortInterestProvider:
         self, settlement_date: date
     ) -> pl.DataFrame:  # pragma: no cover - live
         """Fetch + normalize the consolidated short-interest file for one settlement date."""
-        url = _CDN_URL.format(yyyymmdd=settlement_date.strftime("%Y%m%d"))
+        url = short_interest_url(settlement_date)
         text = self._get_text(url)
         return parse_short_interest(
             text,
             settlement_date=settlement_date,
             dissemination_date=dissemination_date(settlement_date),
+        ).with_columns(
+            source_file_url=pl.lit(url),
+            source_file_sha256=pl.lit(hashlib.sha256(text.encode()).hexdigest()),
         )

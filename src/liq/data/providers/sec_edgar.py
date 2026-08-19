@@ -78,6 +78,26 @@ class EdgarAccessionMetadata:
 
 
 @dataclass(frozen=True)
+class EdgarTickerCandidate:
+    """One current SEC ticker/CIK/name association, without PIT semantics."""
+
+    cik: str
+    ticker: str
+    title: str
+
+
+@dataclass(frozen=True)
+class EdgarFilingIndexEntry:
+    """One accession reference from the official SEC submissions index."""
+
+    cik: str
+    filing_date: date
+    accession_number: str
+    form: str
+    source_url: str
+
+
+@dataclass(frozen=True)
 class EdgarFilingDocument:
     """One document from an EDGAR complete-submission SGML envelope."""
 
@@ -376,7 +396,7 @@ class SECEdgarProvider:
         self._retry_backoff_seconds = retry_backoff_seconds
         self.rate_limiter = RateLimiter(min_interval_seconds=min_interval_seconds)
         self._client: httpx.Client | None = None
-        self._ticker_map: dict[str, str] | None = None
+        self._ticker_entries: tuple[EdgarTickerCandidate, ...] | None = None
 
     # -- transport ---------------------------------------------------------
     def _get_client(self) -> httpx.Client:
@@ -424,31 +444,118 @@ class SECEdgarProvider:
         return self._get_response(url).json()
 
     # -- reference lookups ---------------------------------------------------
-    def _tickers(self) -> dict[str, str]:
-        if self._ticker_map is None:
+    def _ticker_reference_entries(self) -> tuple[EdgarTickerCandidate, ...]:
+        if self._ticker_entries is None:
             payload = self._get_json(TICKERS_URL)
-            self._ticker_map = {
-                entry["ticker"].upper(): _pad_cik(entry["cik_str"]) for entry in payload.values()
-            }
-        return self._ticker_map
+            try:
+                entries = {
+                    EdgarTickerCandidate(
+                        cik=_pad_cik(entry["cik_str"]),
+                        ticker=str(entry["ticker"]).upper(),
+                        title=str(entry["title"]),
+                    )
+                    for entry in payload.values()
+                }
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                raise ProviderError("SEC ticker reference payload is malformed") from exc
+            self._ticker_entries = tuple(
+                sorted(entries, key=lambda entry: (entry.ticker, entry.cik, entry.title))
+            )
+        return self._ticker_entries
+
+    def ticker_candidates(self, symbol: str) -> tuple[EdgarTickerCandidate, ...]:
+        """Return every exact current SEC association for ``symbol``.
+
+        The SEC describes this lookup as current search metadata and does not
+        guarantee its accuracy or scope. Callers must not treat a candidate as
+        point-in-time identity evidence. Ambiguity is preserved rather than
+        silently resolving duplicate ticker associations.
+        """
+        normalized = symbol.strip().upper().replace("-", ".")
+        return tuple(
+            entry
+            for entry in self._ticker_reference_entries()
+            if entry.ticker.replace("-", ".") == normalized
+        )
 
     def resolve_cik(self, symbol: str) -> str | None:
         """Return the zero-padded CIK for a ticker, or ``None`` if unknown.
 
         Hyphenated share classes fall back to EDGAR's dot form (BRK-B → BRK.B).
         """
-        tickers = self._tickers()
-        upper = symbol.upper()
-        return tickers.get(upper) or tickers.get(upper.replace("-", "."))
+        candidates = self.ticker_candidates(symbol)
+        ciks = {candidate.cik for candidate in candidates}
+        if len(ciks) != 1:
+            return None
+        return next(iter(ciks))
+
+    def _filing_payloads(self, cik10: str) -> list[tuple[str, dict[str, Any]]]:
+        submissions_url = SUBMISSIONS_URL.format(cik10=cik10)
+        submissions = self._get_json(submissions_url)
+        try:
+            filings = submissions["filings"]
+            recent = filings["recent"]
+            archives = filings.get("files", [])
+        except (KeyError, TypeError) as exc:
+            raise ProviderError("SEC submissions payload is malformed") from exc
+
+        payloads = [(submissions_url, recent)]
+        for archive in archives:
+            try:
+                archive_url = SUBMISSIONS_ARCHIVE_URL.format(name=archive["name"])
+            except (KeyError, TypeError) as exc:
+                raise ProviderError("SEC submissions archive reference is malformed") from exc
+            payloads.append((archive_url, self._get_json(archive_url)))
+        return payloads
 
     # -- events ---------------------------------------------------------------
     def _symbol_filing_docs(self, cik10: str) -> list[dict[str, Any]]:
-        submissions = self._get_json(SUBMISSIONS_URL.format(cik10=cik10))
-        filings = submissions.get("filings", {})
-        docs = [filings.get("recent", {})]
-        for archive in filings.get("files", []):
-            docs.append(self._get_json(SUBMISSIONS_ARCHIVE_URL.format(name=archive["name"])))
-        return docs
+        return [payload for _source_url, payload in self._filing_payloads(cik10)]
+
+    def filing_index(
+        self,
+        cik: int | str,
+        *,
+        start: date,
+        end: date,
+        forms: Collection[str] | None = None,
+    ) -> tuple[EdgarFilingIndexEntry, ...]:
+        """Return deterministic accession references inside an inclusive window."""
+        if end < start:
+            raise ValueError(f"end ({end}) must be on or after start ({start})")
+        cik10 = _pad_cik(cik)
+        wanted = frozenset(forms) if forms is not None else None
+        entries: set[EdgarFilingIndexEntry] = set()
+        for source_url, payload in self._filing_payloads(cik10):
+            accessions = payload.get("accessionNumber", [])
+            if not isinstance(accessions, list):
+                raise ProviderError("SEC submissions accession array is malformed")
+            for index, accession in enumerate(accessions):
+                raw_date = _parallel_value(payload, "filingDate", index)
+                form = _parallel_value(payload, "form", index)
+                if not accession or not raw_date or not form:
+                    raise ProviderError("SEC submissions filing index contains incomplete rows")
+                try:
+                    filing_date = date.fromisoformat(str(raw_date))
+                except ValueError as exc:
+                    raise ProviderError("SEC submissions filing date is malformed") from exc
+                form_text = str(form)
+                if start <= filing_date <= end and (wanted is None or form_text in wanted):
+                    entries.add(
+                        EdgarFilingIndexEntry(
+                            cik=cik10,
+                            filing_date=filing_date,
+                            accession_number=str(accession),
+                            form=form_text,
+                            source_url=source_url,
+                        )
+                    )
+        return tuple(
+            sorted(
+                entries,
+                key=lambda entry: (-entry.filing_date.toordinal(), entry.accession_number),
+            )
+        )
 
     def fetch_earnings_events(
         self,

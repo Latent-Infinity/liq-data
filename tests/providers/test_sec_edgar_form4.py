@@ -108,7 +108,16 @@ class TestFetchForm4Purchases:
 
         with respx_lib.mock:
             respx_lib.get(TICKERS_URL).mock(
-                return_value=httpx.Response(200, json={"0": {"ticker": "EXMP", "cik_str": 320193}})
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "0": {
+                            "ticker": "EXMP",
+                            "cik_str": 320193,
+                            "title": "Example Inc.",
+                        }
+                    },
+                )
             )
             respx_lib.get(SUBMISSIONS_URL.format(cik10="0000320193")).mock(
                 return_value=httpx.Response(

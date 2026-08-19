@@ -81,6 +81,13 @@ to the filing accession and never falls back to the current ticker map. Missing
 or multiple filing symbols remain explicit for downstream exclusion and
 coverage reporting.
 
+For identity-readiness audits, `ticker_candidates` preserves every exact
+current SEC ticker/CIK/name association instead of overwriting duplicate
+tickers, and `filing_index` returns deterministic accession references from the
+current plus archived submissions indexes. The current ticker file is candidate
+metadata only; an accession-bound trading-symbol fact is still required for
+filing-date evidence, and neither API infers a continuous identity interval.
+
 `SECEdgarProvider.get_corporate_actions` conservatively extracts explicitly
 disclosed cash dividends and stock splits from candidate 8-K documents. It
 retains accession, document, and evidence hashes; never infers an ex-date; and

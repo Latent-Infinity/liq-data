@@ -16,6 +16,8 @@ import respx
 
 from liq.data.exceptions import ConfigurationError, ProviderError, RateLimitError
 from liq.data.providers.sec_edgar import (
+    EdgarFilingIndexEntry,
+    EdgarTickerCandidate,
     SECEdgarProvider,
     complete_submission_url,
     parse_edgar_accession_metadata,
@@ -102,6 +104,21 @@ class TestConstruction:
 
 class TestTickerToCik:
     @respx.mock
+    def test_candidate_lookup_preserves_ambiguous_current_associations(self) -> None:
+        payload = {
+            "0": {"cik_str": 1, "ticker": "DUP", "title": "First Corp"},
+            "1": {"cik_str": 2, "ticker": "DUP", "title": "Second Corp"},
+        }
+        respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=payload))
+        provider = _provider()
+
+        assert provider.ticker_candidates("dup") == (
+            EdgarTickerCandidate(cik="0000000001", ticker="DUP", title="First Corp"),
+            EdgarTickerCandidate(cik="0000000002", ticker="DUP", title="Second Corp"),
+        )
+        assert provider.resolve_cik("DUP") is None
+
+    @respx.mock
     def test_maps_ticker_to_padded_cik(self) -> None:
         respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))
         provider = _provider()
@@ -109,6 +126,17 @@ class TestTickerToCik:
 
     @respx.mock
     def test_hyphen_symbol_falls_back_to_dot_form(self) -> None:
+        respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))
+        assert _provider().ticker_candidates("BRK-B") == (
+            EdgarTickerCandidate(
+                cik="0001067983",
+                ticker="BRK.B",
+                title="Berkshire Hathaway",
+            ),
+        )
+
+    @respx.mock
+    def test_hyphen_symbol_resolves_unique_candidate(self) -> None:
         respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))
         assert _provider().resolve_cik("BRK-B") == "0001067983"
 
@@ -215,6 +243,63 @@ class TestFetchEarningsEvents:
             ["AAPL"], start=date(2022, 1, 1), end=date(2023, 12, 31)
         )
         assert date(2022, 2, 1) in df["filing_date"].to_list()
+
+
+class TestFilingIndex:
+    @respx.mock
+    def test_returns_deterministic_accession_metadata_across_archives(self) -> None:
+        recent_with_archive = {
+            "filings": {
+                "recent": SUBMISSIONS_JSON["filings"]["recent"],
+                "files": [{"name": "CIK0000320193-submissions-001.json"}],
+            }
+        }
+        archive_payload = {
+            "form": ["10-K"],
+            "filingDate": ["2022-02-01"],
+            "accessionNumber": ["0000320193-22-000001"],
+        }
+        respx.get(SUBMISSIONS_URL).mock(return_value=httpx.Response(200, json=recent_with_archive))
+        respx.get(ARCHIVE_URL).mock(return_value=httpx.Response(200, json=archive_payload))
+
+        entries = _provider().filing_index(
+            "0000320193",
+            start=date(2022, 1, 1),
+            end=date(2023, 8, 3),
+            forms={"10-K", "8-K"},
+        )
+
+        assert entries == (
+            EdgarFilingIndexEntry(
+                cik="0000320193",
+                filing_date=date(2023, 8, 3),
+                accession_number="0000320193-23-000077",
+                form="8-K",
+                source_url=SUBMISSIONS_URL,
+            ),
+            EdgarFilingIndexEntry(
+                cik="0000320193",
+                filing_date=date(2023, 5, 4),
+                accession_number="0000320193-23-000064",
+                form="8-K",
+                source_url=SUBMISSIONS_URL,
+            ),
+            EdgarFilingIndexEntry(
+                cik="0000320193",
+                filing_date=date(2022, 2, 1),
+                accession_number="0000320193-22-000001",
+                form="10-K",
+                source_url=ARCHIVE_URL,
+            ),
+        )
+
+    def test_rejects_reversed_window(self) -> None:
+        with pytest.raises(ValueError, match="end"):
+            _provider().filing_index(
+                "0000320193",
+                start=date(2024, 1, 2),
+                end=date(2024, 1, 1),
+            )
 
 
 class TestFetch8KEvents:

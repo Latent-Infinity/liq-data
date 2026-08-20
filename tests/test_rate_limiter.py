@@ -1,3 +1,7 @@
+import concurrent.futures
+import threading
+import time
+from collections import deque
 from datetime import UTC, datetime, timedelta
 
 from liq.data.policies import POLICIES
@@ -69,3 +73,30 @@ def test_rate_limiter_enforces_min_interval(monkeypatch) -> None:
     limiter.acquire()
 
     assert sleep_called == [2.0]
+
+
+def test_rate_limiter_serializes_concurrent_acquisitions() -> None:
+    class ProbeEvents(deque):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.peak_active = 0
+            self.probe_lock = threading.Lock()
+
+        def append(self, value) -> None:
+            with self.probe_lock:
+                self.active += 1
+                self.peak_active = max(self.peak_active, self.active)
+            time.sleep(0.01)
+            super().append(value)
+            with self.probe_lock:
+                self.active -= 1
+
+    limiter = RateLimiter(requests_per_minute=100, burst=100)
+    events = ProbeEvents()
+    limiter._events = events
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda _index: limiter.acquire(), range(8)))
+
+    assert events.peak_active == 1

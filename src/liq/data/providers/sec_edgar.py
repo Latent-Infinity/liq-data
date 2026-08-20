@@ -16,9 +16,12 @@ and requests are throttled to 8/sec via the shared :class:`RateLimiter`.
 
 from __future__ import annotations
 
+import random
 import re
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Collection
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
@@ -32,6 +35,7 @@ from liq.data.exceptions import ConfigurationError, ProviderError, RateLimitErro
 from liq.data.rate_limiter import RateLimiter
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+COMPANY_BROWSE_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 SUBMISSIONS_ARCHIVE_URL = "https://data.sec.gov/submissions/{name}"
 COMPLETE_SUBMISSION_URL = (
@@ -87,11 +91,33 @@ class EdgarTickerCandidate:
 
 
 @dataclass(frozen=True)
+class EdgarTickerDiscoveryCandidate:
+    """SEC company-browse candidate requiring accession confirmation."""
+
+    cik: str
+    queried_ticker: str
+    title: str
+    source_url: str
+
+
+@dataclass(frozen=True)
 class EdgarFilingIndexEntry:
     """One accession reference from the official SEC submissions index."""
 
     cik: str
     filing_date: date
+    accession_number: str
+    form: str
+    source_url: str
+
+
+@dataclass(frozen=True)
+class EdgarFilingClockEntry:
+    """One accession with its official SEC acceptance clock."""
+
+    cik: str
+    filing_date: date
+    acceptance_datetime: datetime
     accession_number: str
     form: str
     source_url: str
@@ -209,7 +235,11 @@ def _filing_symbols(primary_documents: list[str]) -> tuple[str, ...]:
     seen: set[str] = set()
     for document in primary_documents:
         parser = _TradingSymbolParser()
-        parser.feed(document)
+        # Some legacy SEC filings contain malformed marked sections after the
+        # Inline XBRL cover facts. Keep facts already parsed; never infer or
+        # backfill a missing symbol.
+        with suppress(AssertionError):
+            parser.feed(document)
         for raw_value in parser.values:
             symbol = " ".join(raw_value.split()).upper()
             if not symbol or not any(character.isalnum() for character in symbol):
@@ -317,6 +347,36 @@ def _pad_cik(cik: int | str) -> str:
     return str(cik).zfill(10)
 
 
+def parse_company_browse_atom(
+    atom_text: str,
+    *,
+    queried_ticker: str,
+    source_url: str,
+) -> EdgarTickerDiscoveryCandidate | None:
+    """Parse one SEC company-browse result without assigning PIT semantics."""
+    try:
+        root = ET.fromstring(atom_text)
+    except ET.ParseError as exc:
+        raise ProviderError("SEC company-browse response is malformed XML") from exc
+
+    namespace = {"atom": "http://www.w3.org/2005/Atom"}
+    if root.tag != "{http://www.w3.org/2005/Atom}feed":
+        raise ProviderError("SEC company-browse response is not an Atom feed")
+    company = root.find("atom:company-info", namespace)
+    if company is None:
+        return None
+    cik = company.findtext("atom:cik", namespaces=namespace)
+    title = company.findtext("atom:conformed-name", namespaces=namespace)
+    if not cik or not cik.isdigit() or not title:
+        raise ProviderError("SEC company-browse identity is incomplete or invalid")
+    return EdgarTickerDiscoveryCandidate(
+        cik=_pad_cik(cik),
+        queried_ticker=queried_ticker,
+        title=title.strip(),
+        source_url=source_url,
+    )
+
+
 def _parse_acceptance(raw: str) -> datetime:
     return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
 
@@ -412,12 +472,17 @@ class SECEdgarProvider:
             )
         return self._client
 
-    def _get_response(self, url: str) -> httpx.Response:
+    def _get_response(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
         """GET with bounded retry for transport failures and server errors."""
         for attempt in range(self._max_request_attempts):
             self.rate_limiter.acquire()
             try:
-                response = self._get_client().get(url)
+                response = self._get_client().get(url, headers=headers)
             except httpx.RequestError as exc:
                 if attempt + 1 == self._max_request_attempts:
                     raise ProviderError(f"SEC EDGAR request failed: {exc}") from exc
@@ -489,6 +554,44 @@ class SECEdgarProvider:
             return None
         return next(iter(ciks))
 
+    def ticker_discovery_candidate(self, symbol: str) -> EdgarTickerDiscoveryCandidate | None:
+        """Resolve an SEC browse candidate for a current or legacy ticker.
+
+        The browse result is discovery metadata only. Callers must confirm the
+        candidate against accession-bound filing evidence before assigning a
+        point-in-time identity interval.
+        """
+        normalized = symbol.strip().upper().replace("-", ".")
+        url = httpx.URL(
+            COMPANY_BROWSE_URL,
+            params={
+                "action": "getcompany",
+                "CIK": normalized,
+                "owner": "exclude",
+                "count": "10",
+                "output": "atom",
+            },
+        )
+        for attempt in range(self._max_request_attempts):
+            response = self._get_response(
+                str(url),
+                headers={"Accept": "application/atom+xml"},
+            )
+            try:
+                return parse_company_browse_atom(
+                    response.text,
+                    queried_ticker=normalized,
+                    source_url=str(response.request.url),
+                )
+            except ProviderError:
+                if attempt + 1 == self._max_request_attempts:
+                    raise
+                base_delay = self._retry_backoff_seconds * (2**attempt)
+                delay = base_delay + random.uniform(0.0, base_delay * 0.25)  # noqa: S311
+                if delay > 0:
+                    time.sleep(delay)
+        raise AssertionError("SEC company-browse retry loop exhausted")
+
     def _filing_payloads(self, cik10: str) -> list[tuple[str, dict[str, Any]]]:
         submissions_url = SUBMISSIONS_URL.format(cik10=cik10)
         submissions = self._get_json(submissions_url)
@@ -557,6 +660,69 @@ class SECEdgarProvider:
             )
         )
 
+    def filing_clock_index(
+        self,
+        cik: int | str,
+        *,
+        start: date,
+        end: date,
+        forms: Collection[str] | None = None,
+    ) -> tuple[EdgarFilingClockEntry, ...]:
+        """Return accession references with official acceptance timestamps.
+
+        Unlike :meth:`filing_index`, this method rejects a selected filing
+        whose acceptance timestamp is absent or malformed. That fail-closed
+        contract is required when filings are assigned to market sessions.
+        """
+        if end < start:
+            raise ValueError(f"end ({end}) must be on or after start ({start})")
+        cik10 = _pad_cik(cik)
+        wanted = frozenset(forms) if forms is not None else None
+        entries: set[EdgarFilingClockEntry] = set()
+        for source_url, payload in self._filing_payloads(cik10):
+            forms_array = payload.get("form", [])
+            if not isinstance(forms_array, list):
+                raise ProviderError("SEC submissions form array is malformed")
+            for index, raw_form in enumerate(forms_array):
+                form = str(raw_form)
+                if wanted is not None and form not in wanted:
+                    continue
+                raw_date = _parallel_value(payload, "filingDate", index)
+                accession = _parallel_value(payload, "accessionNumber", index)
+                if not raw_date or not accession:
+                    raise ProviderError("SEC submissions filing clock contains incomplete rows")
+                try:
+                    filing_date = date.fromisoformat(str(raw_date))
+                except ValueError as exc:
+                    raise ProviderError("SEC submissions filing date is malformed") from exc
+                if not start <= filing_date <= end:
+                    continue
+                raw_acceptance = _parallel_value(payload, "acceptanceDateTime", index)
+                if not raw_acceptance:
+                    raise ProviderError("SEC submissions filing clock contains incomplete rows")
+                try:
+                    acceptance = _parse_acceptance(str(raw_acceptance))
+                except ValueError as exc:
+                    raise ProviderError(
+                        "SEC submissions acceptance timestamp is malformed"
+                    ) from exc
+                entries.add(
+                    EdgarFilingClockEntry(
+                        cik=cik10,
+                        filing_date=filing_date,
+                        acceptance_datetime=acceptance,
+                        accession_number=str(accession),
+                        form=form,
+                        source_url=source_url,
+                    )
+                )
+        return tuple(
+            sorted(
+                entries,
+                key=lambda entry: (-entry.filing_date.toordinal(), entry.accession_number),
+            )
+        )
+
     def fetch_earnings_events(
         self,
         symbols: list[str],
@@ -594,19 +760,69 @@ class SECEdgarProvider:
         claim that the ticker was valid on the filing date; research consumers
         must verify CIK-to-ticker identity point in time before eligibility.
         """
-        wanted = frozenset(item_types)
-        if not wanted:
-            raise ValueError("item_types must contain at least one SEC item code")
         rows: list[dict[str, Any]] = []
         for symbol in symbols:
             cik10 = self.resolve_cik(symbol)
             if cik10 is None:
                 continue
-            for doc in self._symbol_filing_docs(cik10):
-                for event in _extract_8k(doc, wanted):
-                    if start <= event["filing_date"] <= end:
-                        rows.append({"symbol": symbol, "cik": cik10, **event})
+            rows.extend(
+                self._fetch_8k_event_rows(
+                    cik10,
+                    lookup_symbol=symbol,
+                    start=start,
+                    end=end,
+                    item_types=item_types,
+                )
+            )
         return pl.DataFrame(rows, schema=_GENERIC_8K_EVENT_SCHEMA)
+
+    def fetch_8k_events_for_cik(
+        self,
+        cik: int | str,
+        *,
+        lookup_symbol: str,
+        start: date,
+        end: date,
+        item_types: Collection[str] = DEFAULT_8K_ITEMS,
+    ) -> pl.DataFrame:
+        """Fetch 8-K events for an explicit discovery CIK.
+
+        ``lookup_symbol`` is discovery provenance only. Accession metadata
+        must confirm the filing symbol before research eligibility is assigned.
+        """
+        rows = self._fetch_8k_event_rows(
+            _pad_cik(cik),
+            lookup_symbol=lookup_symbol,
+            start=start,
+            end=end,
+            item_types=item_types,
+        )
+        return pl.DataFrame(rows, schema=_GENERIC_8K_EVENT_SCHEMA)
+
+    def _fetch_8k_event_rows(
+        self,
+        cik10: str,
+        *,
+        lookup_symbol: str,
+        start: date,
+        end: date,
+        item_types: Collection[str],
+    ) -> list[dict[str, Any]]:
+        wanted = frozenset(item_types)
+        if not wanted:
+            raise ValueError("item_types must contain at least one SEC item code")
+        rows: list[dict[str, Any]] = []
+        for doc in self._symbol_filing_docs(cik10):
+            for event in _extract_8k(doc, wanted):
+                if start <= event["filing_date"] <= end:
+                    rows.append(
+                        {
+                            "symbol": lookup_symbol,
+                            "cik": cik10,
+                            **event,
+                        }
+                    )
+        return rows
 
     def fetch_accession_metadata(
         self,

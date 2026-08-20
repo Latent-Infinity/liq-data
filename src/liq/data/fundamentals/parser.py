@@ -13,9 +13,59 @@ from datetime import date
 from typing import Any
 
 from liq.data.fundamentals.concepts import CONCEPT_CANDIDATES, unit_for
-from liq.data.fundamentals.models import AnnualFundamentals, FundamentalsSnapshot
+from liq.data.fundamentals.models import (
+    AnnualFundamentals,
+    CommonSharesFact,
+    FundamentalsSnapshot,
+)
 
 _Fact = dict[str, Any]
+_COMMON_SHARES_CONCEPT = "EntityCommonStockSharesOutstanding"
+
+
+def point_in_time_common_shares(
+    companyfacts: dict[str, Any],
+    *,
+    filed_on_or_before: date,
+) -> CommonSharesFact | None:
+    """Latest positive SEC cover-page share count known by ``filed_on_or_before``.
+
+    Both the filing date and fact period end must be on or before the cutoff.
+    The caller can pass the prior calendar day when same-day filing order is
+    unavailable, which prevents a date-only source from looking ahead.
+    """
+    entries = (
+        companyfacts.get("facts", {})
+        .get("dei", {})
+        .get(_COMMON_SHARES_CONCEPT, {})
+        .get("units", {})
+        .get("shares", [])
+    )
+    candidates: list[tuple[date, date, str, float, str]] = []
+    for entry in entries:
+        try:
+            filed = date.fromisoformat(str(entry["filed"]))
+            period_end = date.fromisoformat(str(entry["end"]))
+            accession = str(entry["accn"])
+            form = str(entry["form"])
+            value = float(entry["val"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not form.startswith(("10-K", "10-Q", "8-K")):
+            continue
+        if filed > filed_on_or_before or period_end > filed_on_or_before or value <= 0.0:
+            continue
+        candidates.append((filed, period_end, accession, value, form))
+    if not candidates:
+        return None
+    filed, period_end, accession, value, form = max(candidates)
+    return CommonSharesFact(
+        value=value,
+        period_end=period_end,
+        filed=filed,
+        accession_number=accession,
+        form=form,
+    )
 
 
 def _annual_facts(node: _Fact, unit: str, filed_le: date) -> dict[str, _Fact]:
@@ -107,4 +157,4 @@ def build_snapshot(
     return FundamentalsSnapshot(symbol=symbol, cik=cik, as_of=as_of, annual=tuple(annual))
 
 
-__all__ = ["build_snapshot", "resolve_concept"]
+__all__ = ["build_snapshot", "point_in_time_common_shares", "resolve_concept"]

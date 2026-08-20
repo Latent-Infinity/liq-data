@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 
 
 class RateLimiter:
@@ -20,27 +21,29 @@ class RateLimiter:
         self.burst = burst or requests_per_minute
         self.min_interval_seconds = min_interval_seconds
         self._events: deque[datetime] = deque()
+        self._lock = Lock()
 
     def acquire(self) -> None:
         """Block until within rate limits."""
         if not self.requests_per_minute and not self.min_interval_seconds:
             return
-        now = datetime.now(UTC)
-        if self.min_interval_seconds and self._events:
-            next_allowed = self._events[-1] + timedelta(seconds=self.min_interval_seconds)
-            sleep_for = (next_allowed - now).total_seconds()
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-                now = datetime.now(UTC)
-        window = timedelta(minutes=1)
-        self._evict(now, window)
-        if self.requests_per_minute and self.burst and len(self._events) >= self.burst:
-            sleep_for = (self._events[0] + window - now).total_seconds()
-            if sleep_for > 0:
-                time.sleep(sleep_for)
+        with self._lock:
             now = datetime.now(UTC)
+            if self.min_interval_seconds and self._events:
+                next_allowed = self._events[-1] + timedelta(seconds=self.min_interval_seconds)
+                sleep_for = (next_allowed - now).total_seconds()
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+                    now = datetime.now(UTC)
+            window = timedelta(minutes=1)
             self._evict(now, window)
-        self._events.append(now)
+            if self.requests_per_minute and self.burst and len(self._events) >= self.burst:
+                sleep_for = (self._events[0] + window - now).total_seconds()
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+                now = datetime.now(UTC)
+                self._evict(now, window)
+            self._events.append(now)
 
     def _evict(self, now: datetime, window: timedelta) -> None:
         while self._events and now - self._events[0] > window:

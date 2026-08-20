@@ -14,7 +14,12 @@ import httpx
 import pytest
 import respx
 
-from liq.data.exceptions import ConfigurationError, ProviderError, RateLimitError
+from liq.data.exceptions import (
+    ConfigurationError,
+    ProviderError,
+    ProviderNoDataError,
+    RateLimitError,
+)
 from liq.data.providers.sec_edgar_fundamentals import (
     COMPANYFACTS_URL,
     SECEdgarFundamentalsProvider,
@@ -79,6 +84,15 @@ class TestFetchFundamentals:
 
 
 class TestTransportErrors:
+    @respx.mock
+    def test_missing_companyfacts_is_explicit_no_data(self) -> None:
+        respx.get(COMPANYFACTS_URL.format(cik10="0000789019")).mock(
+            return_value=httpx.Response(404)
+        )
+
+        with pytest.raises(ProviderNoDataError, match="HTTP 404"):
+            _provider().fetch_companyfacts("0000789019")
+
     @respx.mock
     def test_http_error_raises_provider_error(self) -> None:
         respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))

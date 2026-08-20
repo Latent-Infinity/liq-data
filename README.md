@@ -87,6 +87,9 @@ tickers, and `filing_index` returns deterministic accession references from the
 current plus archived submissions indexes. The current ticker file is candidate
 metadata only; an accession-bound trading-symbol fact is still required for
 filing-date evidence, and neither API infers a continuous identity interval.
+`filing_clock_index` is the fail-closed companion for session-based research:
+it includes the official SEC acceptance timestamp and rejects a selected filing
+whose clock is missing or malformed.
 
 `SECEdgarProvider.get_corporate_actions` conservatively extracts explicitly
 disclosed cash dividends and stock splits from candidate 8-K documents. It

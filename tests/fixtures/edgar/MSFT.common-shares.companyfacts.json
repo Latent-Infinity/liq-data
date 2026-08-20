@@ -1,0 +1,20 @@
+{
+  "cik": 789019,
+  "entityName": "MICROSOFT CORP",
+  "provenance": "SEC EDGAR companyfacts CIK0000789019, fetched 2026-08-19; trimmed to dei:EntityCommonStockSharesOutstanding facts",
+  "facts": {
+    "dei": {
+      "EntityCommonStockSharesOutstanding": {
+        "label": "Entity Common Stock, Shares Outstanding",
+        "units": {
+          "shares": [
+            {"end": "2023-01-19", "val": 7443803533, "accn": "0001564590-23-000733", "fy": 2023, "fp": "Q2", "form": "10-Q", "filed": "2023-01-24", "frame": "CY2022Q4I"},
+            {"end": "2023-04-20", "val": 7435487575, "accn": "0000950170-23-014423", "fy": 2023, "fp": "Q3", "form": "10-Q", "filed": "2023-04-25", "frame": "CY2023Q1I"},
+            {"end": "2023-07-24", "val": 7429763722, "accn": "0000950170-23-035122", "fy": 2023, "fp": "FY", "form": "10-K", "filed": "2023-07-27", "frame": "CY2023Q2I"},
+            {"end": "2023-10-19", "val": 7432262329, "accn": "0000950170-23-054855", "fy": 2024, "fp": "Q1", "form": "10-Q", "filed": "2023-10-24", "frame": "CY2023Q3I"}
+          ]
+        }
+      }
+    }
+  }
+}

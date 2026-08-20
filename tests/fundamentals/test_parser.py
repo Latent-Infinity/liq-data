@@ -14,7 +14,11 @@ import pytest
 
 from liq.data.fundamentals.concepts import CONCEPT_CANDIDATES, unit_for
 from liq.data.fundamentals.models import AnnualFundamentals
-from liq.data.fundamentals.parser import build_snapshot, resolve_concept
+from liq.data.fundamentals.parser import (
+    build_snapshot,
+    point_in_time_common_shares,
+    resolve_concept,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "edgar"
 AS_OF = date(2026, 3, 31)
@@ -22,6 +26,10 @@ AS_OF = date(2026, 3, 31)
 
 def _facts(symbol: str) -> dict:
     return json.loads((FIXTURES / f"{symbol}.companyfacts.json").read_text())
+
+
+def _common_shares_facts() -> dict:
+    return json.loads((FIXTURES / "MSFT.common-shares.companyfacts.json").read_text())
 
 
 def _snap(symbol: str, as_of: date = AS_OF):
@@ -87,6 +95,29 @@ class TestTagResolution:
 
 
 class TestPointInTime:
+    def test_common_shares_are_accession_bound_and_pit(self) -> None:
+        fact = point_in_time_common_shares(
+            _common_shares_facts(),
+            filed_on_or_before=date(2023, 4, 24),
+        )
+
+        assert fact is not None
+        assert fact.value == 7_443_803_533
+        assert fact.period_end == date(2023, 1, 19)
+        assert fact.filed == date(2023, 1, 24)
+        assert fact.accession_number == "0001564590-23-000733"
+        assert fact.form == "10-Q"
+
+    def test_common_shares_include_cutoff_and_missing_is_explicit(self) -> None:
+        fact = point_in_time_common_shares(
+            _common_shares_facts(),
+            filed_on_or_before=date(2023, 4, 25),
+        )
+
+        assert fact is not None
+        assert fact.value == 7_435_487_575
+        assert point_in_time_common_shares({}, filed_on_or_before=date(2023, 4, 25)) is None
+
     def test_future_filing_excluded(self) -> None:
         # MSFT's FY2025 10-K was filed 2025-07-30; before that, FY2024 is latest.
         early = _snap("MSFT", as_of=date(2025, 1, 1)).latest

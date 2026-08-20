@@ -18,7 +18,12 @@ from typing import Any
 
 import httpx
 
-from liq.data.exceptions import ConfigurationError, ProviderError, RateLimitError
+from liq.data.exceptions import (
+    ConfigurationError,
+    ProviderError,
+    ProviderNoDataError,
+    RateLimitError,
+)
 from liq.data.fundamentals.models import FundamentalsSnapshot
 from liq.data.fundamentals.parser import build_snapshot
 from liq.data.providers.sec_edgar import SECEdgarProvider
@@ -72,6 +77,8 @@ class SECEdgarFundamentalsProvider:
             raise ProviderError(f"SEC EDGAR request failed: {exc}") from exc
         if response.status_code == 429:
             raise RateLimitError("SEC EDGAR rate limit exceeded")
+        if response.status_code == 404:
+            raise ProviderNoDataError(f"SEC EDGAR returned HTTP 404 for {url}")
         if response.status_code != 200:
             raise ProviderError(f"SEC EDGAR returned HTTP {response.status_code} for {url}")
         return response.json()

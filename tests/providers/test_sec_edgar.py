@@ -16,8 +16,10 @@ import respx
 
 from liq.data.exceptions import ConfigurationError, ProviderError, RateLimitError
 from liq.data.providers.sec_edgar import (
+    EdgarFilingClockEntry,
     EdgarFilingIndexEntry,
     EdgarTickerCandidate,
+    EdgarTickerDiscoveryCandidate,
     SECEdgarProvider,
     complete_submission_url,
     parse_edgar_accession_metadata,
@@ -26,6 +28,7 @@ from liq.data.providers.sec_edgar import (
 from liq.data.settings import LiqDataSettings, create_sec_edgar_provider
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+COMPANY_BROWSE_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK0000320193.json"
 ARCHIVE_URL = "https://data.sec.gov/submissions/CIK0000320193-submissions-001.json"
 COMPLETE_SUBMISSION_URL = (
@@ -64,6 +67,16 @@ TICKERS_JSON = {
     "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
     "1": {"cik_str": 1067983, "ticker": "BRK.B", "title": "Berkshire Hathaway"},
 }
+
+COMPANY_BROWSE_ATOM = """\
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <company-info>
+    <cik>0001140859</cik>
+    <conformed-name>Cencora, Inc.</conformed-name>
+  </company-info>
+</feed>
+"""
 
 # EDGAR "filings.recent" parallel-array shape.
 SUBMISSIONS_JSON = {
@@ -144,6 +157,76 @@ class TestTickerToCik:
     def test_unknown_symbol_returns_none(self) -> None:
         respx.get(TICKERS_URL).mock(return_value=httpx.Response(200, json=TICKERS_JSON))
         assert _provider().resolve_cik("ZZZZ") is None
+
+    @respx.mock
+    def test_company_browse_preserves_legacy_ticker_as_discovery_only(self) -> None:
+        route = respx.get(
+            COMPANY_BROWSE_URL,
+            params={
+                "action": "getcompany",
+                "CIK": "ABC",
+                "owner": "exclude",
+                "count": "10",
+                "output": "atom",
+            },
+        ).mock(return_value=httpx.Response(200, text=COMPANY_BROWSE_ATOM))
+
+        candidate = _provider().ticker_discovery_candidate("abc")
+
+        assert candidate == EdgarTickerDiscoveryCandidate(
+            cik="0001140859",
+            queried_ticker="ABC",
+            title="Cencora, Inc.",
+            source_url=str(route.calls.last.request.url),
+        )
+        assert route.calls.last.request.headers["Accept"] == "application/atom+xml"
+
+    @respx.mock
+    def test_company_browse_missing_company_is_explicit(self) -> None:
+        respx.get(COMPANY_BROWSE_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=(
+                    '<?xml version="1.0"?>'
+                    '<feed xmlns="http://www.w3.org/2005/Atom">'
+                    "<title>No matching company</title></feed>"
+                ),
+            )
+        )
+
+        assert _provider().ticker_discovery_candidate("ZZZZ") is None
+
+    @respx.mock
+    def test_company_browse_malformed_identity_fails_closed(self) -> None:
+        respx.get(COMPANY_BROWSE_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=(
+                    '<?xml version="1.0"?>'
+                    '<feed xmlns="http://www.w3.org/2005/Atom">'
+                    "<company-info><conformed-name>Missing CIK</conformed-name>"
+                    "</company-info></feed>"
+                ),
+            )
+        )
+
+        with pytest.raises(ProviderError, match="company-browse identity"):
+            _provider().ticker_discovery_candidate("BAD")
+
+    @respx.mock
+    def test_company_browse_retries_http_200_non_xml_interstitial(self) -> None:
+        route = respx.get(COMPANY_BROWSE_URL).mock(
+            side_effect=[
+                httpx.Response(200, text="<html>request rate threshold exceeded</html>"),
+                httpx.Response(200, text=COMPANY_BROWSE_ATOM),
+            ]
+        )
+
+        candidate = _provider().ticker_discovery_candidate("ABC")
+
+        assert candidate is not None
+        assert candidate.cik == "0001140859"
+        assert route.call_count == 2
 
 
 class TestFetchEarningsEvents:
@@ -302,6 +385,94 @@ class TestFilingIndex:
             )
 
 
+class TestFilingClockIndex:
+    @respx.mock
+    def test_returns_all_8k_and_amendment_clocks_across_archives(self) -> None:
+        recent = {
+            "filings": {
+                "recent": {
+                    "form": ["8-K", "8-K/A", "10-Q"],
+                    "filingDate": ["2023-08-03", "2023-08-04", "2023-08-05"],
+                    "acceptanceDateTime": [
+                        "2023-08-03T16:30:15.000Z",
+                        "2023-08-04T10:00:00.000Z",
+                        "2023-08-05T10:00:00.000Z",
+                    ],
+                    "accessionNumber": ["a-1", "a-2", "q-1"],
+                },
+                "files": [{"name": "CIK0000320193-submissions-001.json"}],
+            }
+        }
+        archive = {
+            "form": ["8-K", "10-K"],
+            "filingDate": ["2022-02-01", "2022-02-02"],
+            "acceptanceDateTime": [
+                "2022-02-01T21:00:00.000Z",
+                "2022-02-02T21:00:00.000Z",
+            ],
+            "accessionNumber": ["a-3", "k-1"],
+        }
+        respx.get(SUBMISSIONS_URL).mock(return_value=httpx.Response(200, json=recent))
+        respx.get(ARCHIVE_URL).mock(return_value=httpx.Response(200, json=archive))
+
+        entries = _provider().filing_clock_index(
+            "0000320193",
+            start=date(2022, 1, 1),
+            end=date(2023, 12, 31),
+            forms={"8-K", "8-K/A"},
+        )
+
+        assert entries == (
+            EdgarFilingClockEntry(
+                cik="0000320193",
+                filing_date=date(2023, 8, 4),
+                acceptance_datetime=datetime(2023, 8, 4, 10, 0, tzinfo=UTC),
+                accession_number="a-2",
+                form="8-K/A",
+                source_url=SUBMISSIONS_URL,
+            ),
+            EdgarFilingClockEntry(
+                cik="0000320193",
+                filing_date=date(2023, 8, 3),
+                acceptance_datetime=datetime(2023, 8, 3, 16, 30, 15, tzinfo=UTC),
+                accession_number="a-1",
+                form="8-K",
+                source_url=SUBMISSIONS_URL,
+            ),
+            EdgarFilingClockEntry(
+                cik="0000320193",
+                filing_date=date(2022, 2, 1),
+                acceptance_datetime=datetime(2022, 2, 1, 21, 0, tzinfo=UTC),
+                accession_number="a-3",
+                form="8-K",
+                source_url=ARCHIVE_URL,
+            ),
+        )
+
+    @respx.mock
+    def test_incomplete_clock_row_is_rejected(self) -> None:
+        payload = {
+            "filings": {
+                "recent": {
+                    "form": ["8-K"],
+                    "filingDate": ["2023-08-03"],
+                    "acceptanceDateTime": [],
+                    "accessionNumber": ["a-1"],
+                },
+                "files": [],
+            }
+        }
+        respx.get(SUBMISSIONS_URL).mock(return_value=httpx.Response(200, json=payload))
+
+        with pytest.raises(ProviderError, match="filing clock contains incomplete rows"):
+            _provider().filing_clock_index(
+                "0000320193",
+                start=date(2023, 1, 1),
+                end=date(2023, 12, 31),
+                forms={"8-K", "8-K/A"},
+            )
+
+
 class TestFetch8KEvents:
     @respx.mock
     def test_extracts_registered_item_families_with_metadata(self) -> None:
@@ -421,6 +592,22 @@ class TestFetch8KEvents:
         assert "matched_items" in frame.columns
         assert frame.schema["acceptance_datetime"] == pl.Datetime("us", "UTC")
 
+    @respx.mock
+    def test_fetches_events_for_explicit_cik_without_current_ticker_lookup(self) -> None:
+        respx.get(SUBMISSIONS_URL).mock(return_value=httpx.Response(200, json=SUBMISSIONS_JSON))
+
+        frame = _provider().fetch_8k_events_for_cik(
+            "0000320193",
+            lookup_symbol="AAPL",
+            start=date(2023, 1, 1),
+            end=date(2023, 12, 31),
+            item_types={"2.02"},
+        )
+
+        assert frame.height == 2
+        assert frame["cik"].unique().to_list() == ["0000320193"]
+        assert frame["symbol"].unique().to_list() == ["AAPL"]
+
 
 class TestAccessionMetadata:
     def test_builds_archive_document_url_from_safe_basename(self) -> None:
@@ -493,6 +680,21 @@ class TestAccessionMetadata:
         )
 
         assert metadata.filing_symbols == ()
+        assert metadata.has_ex_99_1 is True
+
+    def test_preserves_symbol_before_malformed_legacy_markup(self) -> None:
+        malformed = ACCESSION_SUBMISSION.replace(
+            "</body>",
+            "<![broken marked section</body>",
+        )
+
+        metadata = parse_edgar_accession_metadata(
+            malformed,
+            cik="0000320193",
+            accession_number="0000320193-23-000075",
+        )
+
+        assert metadata.filing_symbols == ("AAPL",)
         assert metadata.has_ex_99_1 is True
 
     @respx.mock

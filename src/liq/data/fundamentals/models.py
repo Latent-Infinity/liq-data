@@ -14,6 +14,18 @@ from datetime import date
 from pydantic import BaseModel, ConfigDict
 
 
+class CommonSharesFact(BaseModel):
+    """One accession-bound common-shares fact known by a PIT cutoff."""
+
+    model_config = ConfigDict(frozen=True)
+
+    value: float
+    period_end: date
+    filed: date
+    accession_number: str
+    form: str
+
+
 class AnnualFundamentals(BaseModel):
     """One fiscal year of annual (10-K) fundamentals, as known at a filing."""
 
@@ -170,4 +182,4 @@ class FundamentalsSnapshot(BaseModel):
         return tuple(f for f in fields if getattr(latest, f) is None)
 
 
-__all__ = ["AnnualFundamentals", "FundamentalsSnapshot"]
+__all__ = ["AnnualFundamentals", "CommonSharesFact", "FundamentalsSnapshot"]

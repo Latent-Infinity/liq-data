@@ -107,6 +107,17 @@ into the XNYS session bucket, public/event timestamps, reaction-window end, and
 latency decision timestamps. Before-open, after-close, weekend, and holiday
 events are re-anchored to the applicable next regular-session open.
 
+### Coinbase Derivatives contract metadata
+
+Coinbase Exchange spot and Coinbase Derivatives Exchange (CDE/FairX) use
+different hosts and credentials. `CoinbaseDerivativesProvider` is intentionally
+read-only and currently exposes only authenticated contract identity from the
+CDE instruments endpoint. Configure its separate DCC credentials with
+`COINBASE_DERIVATIVES_API_KEY`, `COINBASE_DERIVATIVES_API_SECRET`, and
+`COINBASE_DERIVATIVES_PASSPHRASE`. It has no funding-history, price, order, or
+account method; those remain outside the interface until the applicable
+research dataset/fold contract is human-frozen.
+
 ### Anti-patterns to Avoid
 
 Do NOT use direct parquet access:

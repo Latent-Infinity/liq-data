@@ -12,6 +12,7 @@ from liq.data.settings import (
     LiqDataSettings,
     create_alpaca_provider,
     create_binance_provider,
+    create_coinbase_derivatives_provider,
     create_coinbase_provider,
     create_oanda_provider,
     create_polygon_provider,
@@ -45,6 +46,9 @@ class TestLiqDataSettings:
         assert settings.oanda_environment == "practice"
         assert settings.binance_api_key is None
         assert settings.binance_use_us is False
+        assert settings.coinbase_derivatives_api_key is None
+        assert settings.coinbase_derivatives_api_secret is None
+        assert settings.coinbase_derivatives_passphrase is None
         # data_root is resolved to absolute path
         assert settings.data_root.is_absolute()
         assert settings.data_root.name == "data"
@@ -293,6 +297,53 @@ class TestCreateCoinbaseProvider:
         provider = create_coinbase_provider(settings)
 
         assert provider.name == "coinbase"
+        assert provider._api_key == "test_key"
+        assert provider._passphrase == "test_passphrase"
+
+
+class TestCreateCoinbaseDerivativesProvider:
+    """The CDE credentials are separate from Coinbase Exchange spot keys."""
+
+    def test_missing_api_key_raises(self) -> None:
+        settings = LiqDataSettings(
+            coinbase_derivatives_api_key=None,
+            coinbase_derivatives_api_secret="secret",
+            coinbase_derivatives_passphrase="pass",
+        )
+
+        with pytest.raises(ValueError, match="COINBASE_DERIVATIVES_API_KEY not configured"):
+            create_coinbase_derivatives_provider(settings)
+
+    def test_missing_api_secret_raises(self) -> None:
+        settings = LiqDataSettings(
+            coinbase_derivatives_api_key="key",
+            coinbase_derivatives_api_secret=None,
+            coinbase_derivatives_passphrase="pass",
+        )
+
+        with pytest.raises(ValueError, match="COINBASE_DERIVATIVES_API_SECRET not configured"):
+            create_coinbase_derivatives_provider(settings)
+
+    def test_missing_passphrase_raises(self) -> None:
+        settings = LiqDataSettings(
+            coinbase_derivatives_api_key="key",
+            coinbase_derivatives_api_secret="secret",
+            coinbase_derivatives_passphrase=None,
+        )
+
+        with pytest.raises(ValueError, match="COINBASE_DERIVATIVES_PASSPHRASE not configured"):
+            create_coinbase_derivatives_provider(settings)
+
+    def test_creates_separate_derivatives_provider(self) -> None:
+        settings = LiqDataSettings(
+            coinbase_derivatives_api_key="test_key",
+            coinbase_derivatives_api_secret="dGVzdF9zZWNyZXQ=",  # base64("test_secret")
+            coinbase_derivatives_passphrase="test_passphrase",
+        )
+
+        provider = create_coinbase_derivatives_provider(settings)
+
+        assert provider.name == "coinbase_derivatives"
         assert provider._api_key == "test_key"
         assert provider._passphrase == "test_passphrase"
 

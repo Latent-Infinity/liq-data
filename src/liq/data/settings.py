@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from liq.data.providers.alpaca import AlpacaProvider
     from liq.data.providers.binance import BinanceProvider
     from liq.data.providers.coinbase import CoinbaseProvider
+    from liq.data.providers.coinbase_derivatives import CoinbaseDerivativesProvider
     from liq.data.providers.databento import DatabentoProvider
     from liq.data.providers.finra_short_interest import FINRAShortInterestProvider
     from liq.data.providers.fred import FREDProvider
@@ -148,6 +149,17 @@ class LiqDataSettings(BaseSettings):
     )
     coinbase_passphrase: str | None = Field(
         default=None, description="Coinbase Exchange API passphrase"
+    )
+
+    # Coinbase Derivatives Exchange settings (separate DCC credentials)
+    coinbase_derivatives_api_key: str | None = Field(
+        default=None, description="Coinbase Derivatives Exchange API key"
+    )
+    coinbase_derivatives_api_secret: str | None = Field(
+        default=None, description="Coinbase Derivatives Exchange secret (base64 encoded)"
+    )
+    coinbase_derivatives_passphrase: str | None = Field(
+        default=None, description="Coinbase Derivatives Exchange API passphrase"
     )
 
     # Polygon settings
@@ -334,6 +346,33 @@ def create_coinbase_provider(
         api_key=settings.coinbase_api_key,
         api_secret=settings.coinbase_api_secret,
         passphrase=settings.coinbase_passphrase,
+    )
+
+
+def create_coinbase_derivatives_provider(
+    settings: LiqDataSettings | None = None,
+) -> "CoinbaseDerivativesProvider":
+    """Create the read-only CDE metadata provider from separate DCC settings."""
+    from liq.data.providers.coinbase_derivatives import CoinbaseDerivativesProvider
+
+    if settings is None:
+        settings = get_settings()
+
+    if not settings.coinbase_derivatives_api_key:
+        raise ValueError("COINBASE_DERIVATIVES_API_KEY not configured. Set a DCC API key in .env.")
+    if not settings.coinbase_derivatives_api_secret:
+        raise ValueError(
+            "COINBASE_DERIVATIVES_API_SECRET not configured. Set the DCC secret in .env."
+        )
+    if not settings.coinbase_derivatives_passphrase:
+        raise ValueError(
+            "COINBASE_DERIVATIVES_PASSPHRASE not configured. Set the DCC passphrase in .env."
+        )
+
+    return CoinbaseDerivativesProvider(
+        api_key=settings.coinbase_derivatives_api_key,
+        api_secret=settings.coinbase_derivatives_api_secret,
+        passphrase=settings.coinbase_derivatives_passphrase,
     )
 
 

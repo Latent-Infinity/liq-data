@@ -7,6 +7,10 @@ from liq.data.providers.alpaca import AlpacaProvider
 from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE, BaseProvider
 from liq.data.providers.binance import BinanceProvider
 from liq.data.providers.coinbase import CoinbaseProvider
+from liq.data.providers.coinbase_derivatives import (
+    CoinbaseDerivativesInstrument,
+    CoinbaseDerivativesProvider,
+)
 from liq.data.providers.databento import DatabentoProvider
 from liq.data.providers.finra_short_interest import FINRAShortInterestProvider
 from liq.data.providers.fred import FREDProvider
@@ -21,6 +25,8 @@ __all__ = [
     "BaseProvider",
     "BinanceProvider",
     "CoinbaseProvider",
+    "CoinbaseDerivativesInstrument",
+    "CoinbaseDerivativesProvider",
     "DatabentoProvider",
     "FINRAShortInterestProvider",
     "FREDProvider",

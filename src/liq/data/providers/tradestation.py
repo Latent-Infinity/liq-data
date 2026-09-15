@@ -436,6 +436,7 @@ class TradeStationProvider(BaseProvider):
         start: date,
         end: date,
         timeframe: str = "1d",
+        sessiontemplate: str = "Default",
     ) -> pl.DataFrame:
         """Fetch OHLCV bar data from TradeStation with automatic pagination.
 
@@ -444,6 +445,9 @@ class TradeStationProvider(BaseProvider):
             start: Start date (inclusive)
             end: End date (inclusive)
             timeframe: Bar timeframe (default: "1d")
+            sessiontemplate: Intraday US equity session template. Valid values are
+                ``Default``, ``USEQPre``, ``USEQPost``, ``USEQPreAndPost``, and
+                ``USEQ24Hour``.
 
         Returns:
             DataFrame with columns: timestamp, open, high, low, close, volume
@@ -453,6 +457,15 @@ class TradeStationProvider(BaseProvider):
             RateLimitError: If rate limit is exceeded
         """
         self.validate_timeframe(timeframe)
+        valid_session_templates = {
+            "Default",
+            "USEQPre",
+            "USEQPost",
+            "USEQPreAndPost",
+            "USEQ24Hour",
+        }
+        if sessiontemplate not in valid_session_templates:
+            raise ProviderError(f"invalid TradeStation sessiontemplate: {sessiontemplate}")
 
         unit, interval = self.TIMEFRAME_MAP[timeframe]
         api_symbol = self._normalize_symbol(symbol)
@@ -470,6 +483,8 @@ class TradeStationProvider(BaseProvider):
                 "barsback": str(bars_per_request),
                 "lastdate": current_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
+            if unit == "Minute":
+                params["sessiontemplate"] = sessiontemplate
 
             data = self._make_request_with_backoff(
                 "GET", f"/marketdata/barcharts/{api_symbol}", params
@@ -487,7 +502,8 @@ class TradeStationProvider(BaseProvider):
                 for bar in bars
             ]
             earliest = min(timestamp for _, timestamp in parsed_bars)
-            next_end = earliest - timedelta(seconds=1)
+            page_step = timedelta(minutes=1) if timeframe == "1m" else timedelta(seconds=1)
+            next_end = earliest - page_step
 
             # TradeStation can repeat a daily boundary bar whose timestamp is
             # later than the requested lastdate. Stop before appending that

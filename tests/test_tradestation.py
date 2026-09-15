@@ -205,6 +205,19 @@ class TestTradeStationProviderFetchBars:
                 "AAPL", date(2024, 1, 15), date(2024, 1, 15), timeframe="invalid"
             )
 
+    def test_fetch_bars_invalid_session_template_raises(
+        self,
+        tradestation_provider: TradeStationProvider,
+    ) -> None:
+        with pytest.raises(ProviderError, match="sessiontemplate"):
+            tradestation_provider.fetch_bars(
+                "AAPL",
+                date(2024, 1, 15),
+                date(2024, 1, 15),
+                timeframe="1m",
+                sessiontemplate="Unknown",
+            )
+
 
 class TestTradeStationProviderOAuth2:
     """Tests for TradeStation OAuth2 authentication."""
@@ -381,6 +394,25 @@ class TestTradeStationProviderPagination:
         assert isinstance(result, pl.DataFrame)
         # Should have bars from multiple paginated requests
         assert len(result) >= 2
+
+    @respx.mock
+    def test_intraday_request_declares_session_template(
+        self,
+        tradestation_provider: TradeStationProvider,
+        mock_token_response: dict,
+    ) -> None:
+        respx.post("https://signin.tradestation.com/oauth/token").mock(
+            return_value=httpx.Response(200, json=mock_token_response)
+        )
+        captured: list[str | None] = []
+
+        def _response(request: httpx.Request) -> httpx.Response:
+            captured.append(request.url.params.get("sessiontemplate"))
+            return httpx.Response(200, json={"Bars": []})
+
+        respx.get(url__regex=r".*/marketdata/barcharts/.*").mock(side_effect=_response)
+        tradestation_provider.fetch_bars("AAPL", date(2024, 1, 2), date(2024, 1, 2), timeframe="1m")
+        assert captured == ["Default"]
 
     @respx.mock
     def test_pagination_stops_when_boundary_page_makes_no_backward_progress(

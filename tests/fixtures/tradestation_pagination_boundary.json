@@ -1,0 +1,51 @@
+{
+  "provenance": {
+    "provider": "TradeStation",
+    "retrieved_on": "2026-09-11",
+    "source_sha256": "46f57d3c29916acef8417af07b2b9237cefcc1e8d4c3c1767b1e278b76d967dc",
+    "source_request_lastdate": "2024-05-30T14:10:59Z",
+    "use": "real source fixture for software pagination regression; no strategy evidence"
+  },
+  "Bars": [
+    {
+      "BarStatus": "Closed",
+      "Close": "153.61",
+      "DownTicks": 48,
+      "DownVolume": 5788,
+      "Epoch": 1717078200000,
+      "High": "153.81",
+      "IsEndOfHistory": false,
+      "IsRealtime": false,
+      "Low": "153.48",
+      "Open": "153.81",
+      "OpenInterest": "0",
+      "TimeStamp": "2024-05-30T14:10:00Z",
+      "TotalTicks": 79,
+      "TotalVolume": "10558",
+      "UnchangedTicks": 0,
+      "UnchangedVolume": 0,
+      "UpTicks": 31,
+      "UpVolume": 4770
+    },
+    {
+      "BarStatus": "Closed",
+      "Close": "153.55",
+      "DownTicks": 55,
+      "DownVolume": 7635,
+      "Epoch": 1717078260000,
+      "High": "153.69",
+      "IsEndOfHistory": true,
+      "IsRealtime": false,
+      "Low": "153.53",
+      "Open": "153.64",
+      "OpenInterest": "0",
+      "TimeStamp": "2024-05-30T14:11:00Z",
+      "TotalTicks": 102,
+      "TotalVolume": "14706",
+      "UnchangedTicks": 0,
+      "UnchangedVolume": 0,
+      "UpTicks": 47,
+      "UpVolume": 7071
+    }
+  ]
+}

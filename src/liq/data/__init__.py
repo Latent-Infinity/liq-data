@@ -7,12 +7,16 @@ for fetching and storing financial time-series data.
 
 from liq.data.async_fetcher import AsyncDataFetcher, AsyncRetryPolicy
 from liq.data.exceptions import (
+    GOVERNANCE_REFUSALS,
     AuthenticationError,
     ConfigurationError,
     DataError,
     LockboxViolationError,
     ProviderError,
     RateLimitError,
+    StorageVenueMismatchError,
+    UnclassifiedProviderError,
+    UndeclaredReadError,
     ValidationError,
     ValidationReuseError,
 )
@@ -29,10 +33,16 @@ from liq.data.fx_session import (
 from liq.data.instruments import InstrumentSync
 from liq.data.lockbox import (
     INTRADAY_CAMPAIGN_LEDGER_V1,
+    STORAGE_KEY_VENUES,
+    UNGOVERNED_PROVIDERS,
     FoldWindows,
     LockboxGuard,
     LockboxLedger,
+    StorageKeyVenue,
+    declared_storage_venue,
     resolve_dataset,
+    ungoverned_dataset_identity,
+    unreachable_datasets,
 )
 from liq.data.protocols import AsyncMarketDataProvider, MarketDataProvider
 from liq.data.providers import (
@@ -94,7 +104,14 @@ __all__ = [
     "FoldWindows",
     "INTRADAY_CAMPAIGN_LEDGER_V1",
     "resolve_dataset",
+    "UNGOVERNED_PROVIDERS",
+    "STORAGE_KEY_VENUES",
+    "StorageKeyVenue",
+    "declared_storage_venue",
+    "ungoverned_dataset_identity",
+    "unreachable_datasets",
     # Exceptions
+    "GOVERNANCE_REFUSALS",
     "DataError",
     "ProviderError",
     "RateLimitError",
@@ -102,5 +119,8 @@ __all__ = [
     "ValidationError",
     "ConfigurationError",
     "LockboxViolationError",
+    "StorageVenueMismatchError",
+    "UnclassifiedProviderError",
+    "UndeclaredReadError",
     "ValidationReuseError",
 ]

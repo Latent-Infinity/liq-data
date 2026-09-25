@@ -1,5 +1,6 @@
 """Pytest fixtures for liq.data tests."""
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import polars as pl
@@ -8,6 +9,47 @@ import pytest
 
 def _noop_persist_env_value(*_args: object, **_kwargs: object) -> None:
     return None
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_data_root(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Point the default data root at a throwaway directory for every test.
+
+    ``DATA_ROOT`` in the developer's ``.env`` names the real store, so a test
+    that constructs ``DataService()`` without an explicit ``data_root`` reads
+    and writes there. Its declared reads then append to the production lockbox
+    usage ledger, which makes that ledger's entry counts, date ranges and arm
+    coverage a function of how often somebody ran the suite rather than of
+    research activity. The ledger is append-only by design and cannot be
+    cleaned up afterwards, so the isolation has to happen before the write.
+
+    An environment variable is used rather than a patch of ``LiqDataSettings``
+    because it is the same channel production configuration travels through, so
+    nothing in the settings chain is bypassed by the test harness. The cached
+    settings and store are cleared on both sides of the test so neither a
+    previously cached real root leaks in nor a temporary root leaks out.
+
+    Tests marked ``realdata`` deliberately resolve against the real store and
+    are exempt; they are opt-in behind ``RUN_REALDATA=1``.
+    """
+    import liq.data.settings as _settings
+
+    if request.node.get_closest_marker("realdata") is not None:
+        yield
+        return
+
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path_factory.mktemp("hermetic_data_root")))
+    _settings.get_settings.cache_clear()
+    _settings.get_store.cache_clear()
+    try:
+        yield
+    finally:
+        _settings.get_settings.cache_clear()
+        _settings.get_store.cache_clear()
 
 
 @pytest.fixture(autouse=True)

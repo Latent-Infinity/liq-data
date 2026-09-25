@@ -12,6 +12,13 @@ from liq.data.service import DataService
 
 app = typer.Typer(help="Commands for fetching and updating market data")
 
+#: Ingestion is infrastructure, not research: it declares ``dev_smoke``, which
+#: is logged in the lockbox usage ledger and is never research evidence. The
+#: component doing the reading is named in ``arm_id`` rather than in a new
+#: purpose token.
+INGEST_PURPOSE = "dev_smoke"
+INGEST_ARM_ID = "liq_data_ingest_cli"
+
 
 @app.command("fetch")
 def fetch_bars(
@@ -74,6 +81,8 @@ def fetch_bars(
                 timeframe=timeframe,
                 save=not dry_run,
                 mode=mode,
+                purpose=INGEST_PURPOSE,
+                arm_id=INGEST_ARM_ID,
             )
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")
@@ -128,7 +137,15 @@ def backfill_bars(
     console.print(
         f"\n[bold blue]Backfilling {symbol} {timeframe} from {start_date} to {end_date}[/bold blue]"
     )
-    df = ds.backfill(provider, symbol, start=start_date, end=end_date, timeframe=timeframe)
+    df = ds.backfill(
+        provider,
+        symbol,
+        start=start_date,
+        end=end_date,
+        timeframe=timeframe,
+        purpose=INGEST_PURPOSE,
+        arm_id=INGEST_ARM_ID,
+    )
     console.print(f"[green]Backfill complete. Rows now: {len(df)}[/green]")
 
 

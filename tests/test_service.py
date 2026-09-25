@@ -5,16 +5,35 @@ import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import TypedDict
 from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
 
-from liq.data.exceptions import LockboxViolationError, SchemaValidationError
+from liq.data.exceptions import (
+    LockboxViolationError,
+    SchemaValidationError,
+    StorageVenueMismatchError,
+    UndeclaredReadError,
+)
+from liq.data.providers.binance import BinanceProvider
 from liq.data.service import BarCoverageObservation, DataService
 from liq.data.settings import LiqDataSettings
+from liq.data.universes import UniverseDefinition, UniverseKind
 from liq.store import key_builder
 from liq.store.parquet import ParquetStore
+
+
+#: Declaration for reads made by this suite's own fixtures. They are not
+#: research, so they declare ``dev_smoke`` and name the component in ``arm_id``
+#: rather than minting a purpose token for test scaffolding.
+class _SmokeRead(TypedDict):
+    purpose: str
+    arm_id: str
+
+
+SMOKE: _SmokeRead = {"purpose": "dev_smoke", "arm_id": "liq_data_service_tests"}
 
 
 def write_test_data(
@@ -69,7 +88,7 @@ class TestDataServiceLoad:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.load("oanda", "EUR_USD", "1m")
+        result = ds.load("oanda", "EUR_USD", "1m", **SMOKE)
 
         assert isinstance(result, pl.DataFrame)
         assert len(result) == 1
@@ -94,7 +113,7 @@ class TestDataServiceLoad:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.load("oanda", "EUR_USD", "2m")
+        result = ds.load("oanda", "EUR_USD", "2m", **SMOKE)
         assert len(result) == 2
         assert ds.store.exists(f"oanda/{key_builder.bars('EUR_USD', '2m')}")
 
@@ -116,7 +135,7 @@ class TestDataServiceLoad:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", base_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.load("oanda", "EUR_USD", "2m")
+        result = ds.load("oanda", "EUR_USD", "2m", **SMOKE)
         assert result.height == 1
 
         new_df = pl.DataFrame(
@@ -135,7 +154,7 @@ class TestDataServiceLoad:
         ds.store.write(f"oanda/{key_builder.bars('EUR_USD', '1m')}", new_df, mode="append")
 
         with caplog.at_level(logging.INFO):
-            refreshed = ds.load("oanda", "EUR_USD", "2m")
+            refreshed = ds.load("oanda", "EUR_USD", "2m", **SMOKE)
         assert refreshed.height == 2
         assert refreshed["timestamp"].max() == datetime(2024, 1, 1, 0, 2, tzinfo=UTC)
         assert "Refreshing cached 2m aggregate" in caplog.text
@@ -176,7 +195,7 @@ class TestDataServiceLoad:
         write_test_data(tmp_path, "tradestation", "SPY", "1m", base_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.load("tradestation", "SPY", "1d")
+        result = ds.load("tradestation", "SPY", "1d", **SMOKE)
 
         timestamps = result["timestamp"].to_list()
         # History older than the 1m base survives the rebuild.
@@ -223,7 +242,7 @@ class TestDataServiceLoad:
         write_test_data(tmp_path, "tradestation", "QQQ", "1m", base_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.load("tradestation", "QQQ", "1h")
+        result = ds.load("tradestation", "QQQ", "1h", **SMOKE)
 
         timestamps = result["timestamp"].to_list()
         assert datetime(2023, 12, 29, 15, 0, tzinfo=UTC) in timestamps
@@ -279,7 +298,7 @@ class TestDataServiceLoad:
         )
 
         ds = DataService(data_root=tmp_path)
-        result = ds.load("tradestation", "DIA", "1d")
+        result = ds.load("tradestation", "DIA", "1d", **SMOKE)
 
         assert result["timestamp"].to_list() == [
             datetime(2017, 1, 3, 21, 0, tzinfo=UTC),
@@ -322,7 +341,7 @@ class TestDataServiceLoad:
         write_test_data(tmp_path, "tradestation", "IWM", "1m", base_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.load("tradestation", "IWM", "1d")
+        result = ds.load("tradestation", "IWM", "1d", **SMOKE)
 
         assert result["timestamp"].to_list() == [
             datetime(2024, 1, 1, tzinfo=UTC),
@@ -335,7 +354,7 @@ class TestDataServiceLoad:
         ds = DataService(data_root=tmp_path)
 
         with pytest.raises(FileNotFoundError, match="Data not found"):
-            ds.load("oanda", "MISSING_SYMBOL", "1m")
+            ds.load("oanda", "MISSING_SYMBOL", "1m", **SMOKE)
 
 
 class TestDataServiceList:
@@ -453,6 +472,7 @@ class TestDataServiceFetch:
                 start=date(2024, 1, 15),
                 end=date(2024, 1, 15),
                 timeframe="1h",
+                **SMOKE,
             )
 
         assert isinstance(result, pl.DataFrame)
@@ -484,6 +504,7 @@ class TestDataServiceFetch:
                 # No end date provided - should default to today
                 timeframe="1h",
                 save=False,
+                **SMOKE,
             )
 
         # Verify fetch_bars was called with today's date as end
@@ -515,11 +536,12 @@ class TestDataServiceFetch:
                 end=date(2024, 1, 15),
                 timeframe="1h",
                 save=True,
+                **SMOKE,
             )
 
         # Verify data was saved via store
         assert ds.store.exists(f"oanda/{key_builder.bars('EUR_USD', '1h')}")
-        loaded = ds.load("oanda", "EUR_USD", "1h")
+        loaded = ds.load("oanda", "EUR_USD", "1h", **SMOKE)
         assert len(loaded) == 1
 
     def test_fetch_no_save_option(self, tmp_path: Path) -> None:
@@ -547,6 +569,7 @@ class TestDataServiceFetch:
                 end=date(2024, 1, 15),
                 timeframe="1h",
                 save=False,
+                **SMOKE,
             )
 
         assert isinstance(result, pl.DataFrame)
@@ -639,7 +662,7 @@ class TestDataServiceValidate:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.validate("oanda", "EUR_USD", "1m")
+        result = ds.validate("oanda", "EUR_USD", "1m", **SMOKE)
 
         assert isinstance(result, dict)
         assert "valid" in result
@@ -660,7 +683,7 @@ class TestDataServiceValidate:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.validate("oanda", "EUR_USD", "1m")
+        result = ds.validate("oanda", "EUR_USD", "1m", **SMOKE)
 
         assert result["null_count"] > 0
 
@@ -688,7 +711,7 @@ class TestDataServiceValidate:
         test_df.write_parquet(data_dir / "data.parquet")
 
         ds = DataService(data_root=tmp_path)
-        result = ds.validate("oanda", "EUR_USD", "1m")
+        result = ds.validate("oanda", "EUR_USD", "1m", **SMOKE)
 
         assert result["valid"] is False
         assert any("duplicate" in e for e in result["errors"])
@@ -711,7 +734,7 @@ class TestDataServiceValidate:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", df)
 
         ds = DataService(data_root=tmp_path)
-        gaps = ds.gaps("oanda", "EUR_USD", "1m", expected_minutes=1)
+        gaps = ds.gaps("oanda", "EUR_USD", "1m", expected_minutes=1, **SMOKE)
         assert gaps  # gap detected
 
     def test_backfill_fetches_missing(self, tmp_path: Path) -> None:
@@ -745,7 +768,12 @@ class TestDataServiceValidate:
         mock_provider.fetch_bars.return_value = fetched
         with patch.object(ds, "_get_provider", return_value=mock_provider):
             combined = ds.backfill(
-                "oanda", "EUR_USD", start=date(2024, 1, 1), end=date(2024, 1, 1), timeframe="1m"
+                "oanda",
+                "EUR_USD",
+                start=date(2024, 1, 1),
+                end=date(2024, 1, 1),
+                timeframe="1m",
+                **SMOKE,
             )
 
         assert combined.height == 2
@@ -775,7 +803,7 @@ class TestDataServiceInfo:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.info("oanda", "EUR_USD", "1m")
+        result = ds.info("oanda", "EUR_USD", "1m", **SMOKE)
 
         assert isinstance(result, dict)
         assert "row_count" in result
@@ -808,7 +836,7 @@ class TestDataServiceStats:
         write_test_data(tmp_path, "oanda", "EUR_USD", "1m", test_df)
 
         ds = DataService(data_root=tmp_path)
-        result = ds.stats("oanda", "EUR_USD", "1m")
+        result = ds.stats("oanda", "EUR_USD", "1m", **SMOKE)
 
         assert isinstance(result, dict)
         assert "close" in result
@@ -1005,7 +1033,12 @@ class TestDataServiceExtended:
                 "oanda", "EUR_USD", date(2024, 1, 1), save=True
             )
             fetched_actions = ds.fetch_corporate_actions(
-                "oanda", "EUR_USD", start=date(2024, 1, 1), end=date(2024, 1, 2), save=True
+                "oanda",
+                "EUR_USD",
+                start=date(2024, 1, 1),
+                end=date(2024, 1, 2),
+                save=True,
+                **SMOKE,
             )
 
         assert fetched_fundamentals == fundamentals
@@ -1371,11 +1404,18 @@ class TestDataServiceBarCoverageProbe:
     def test_short_interest_discriminator_cannot_omit_research_purpose(
         self, tmp_path: Path
     ) -> None:
+        """Still refused, now under the type that says what is actually wrong.
+
+        The omission used to surface as a ``LockboxViolationError`` naming the
+        short-interest authorization, which reported a fold refusal for what
+        was only a missing declaration. Default-deny refuses it earlier and
+        types it as such; the discriminator's own fold rules are unchanged.
+        """
         ds = DataService(data_root=tmp_path)
 
         with (
             patch.object(ds, "_get_provider") as get_provider,
-            pytest.raises(LockboxViolationError, match="declared characterization purpose"),
+            pytest.raises(UndeclaredReadError, match="declares no purpose"),
         ):
             ds.fetch(
                 "tradestation",
@@ -1489,11 +1529,17 @@ class TestDataServiceResearchReadAssetClass:
                 asset_class="future",
             )
 
-    def test_non_research_future_read_is_unguarded(self, tmp_path: Path) -> None:
-        """purpose=None short-circuits the guard regardless of asset_class
-        (backward compatible)."""
+    def test_undeclared_future_read_is_refused(self, tmp_path: Path) -> None:
+        """purpose=None is refused regardless of asset_class.
+
+        This is the inverted form of the former
+        ``test_non_research_future_read_is_unguarded``: same call under test,
+        opposite expectation. Omitting the declaration used to short-circuit
+        the guard and return ``None``; it now raises, and the raised type says
+        *the declaration is missing*, not *the fold forbids it*.
+        """
         ds = DataService(data_root=tmp_path)
-        assert (
+        with pytest.raises(UndeclaredReadError) as excinfo:
             ds._guard_research_read(
                 "tradestation",
                 "@MBT",
@@ -1504,5 +1550,496 @@ class TestDataServiceResearchReadAssetClass:
                 final_portfolio_review=False,
                 asset_class="future",
             )
-            is None
+        assert not isinstance(excinfo.value, LockboxViolationError)
+
+
+class TestUndeclaredReadsAreRefused:
+    """Default-deny: an entry point that can return market values refuses a
+    read that declares no ``purpose``, before any store or provider is touched.
+
+    Every case below asserts refusal *and* non-vacuity: the mock standing in
+    for the store or the provider records no call at all, so the refusal
+    cannot be an artifact of the read having already happened.
+    """
+
+    ARM = "liq_data_default_deny_tests"
+    START = date(2023, 1, 2)
+    END = date(2023, 1, 31)
+
+    @staticmethod
+    def _bars(tmp_path: Path) -> None:
+        write_test_data(
+            tmp_path,
+            "tradestation",
+            "AAPL",
+            "1m",
+            pl.DataFrame(
+                {
+                    "timestamp": [
+                        datetime(2023, 1, 3, 14, 30, tzinfo=UTC),
+                        datetime(2023, 1, 3, 14, 31, tzinfo=UTC),
+                    ],
+                    "open": [1.0, 1.1],
+                    "high": [1.2, 1.3],
+                    "low": [0.9, 1.0],
+                    "close": [1.1, 1.2],
+                    "volume": [100, 110],
+                }
+            ),
         )
+
+    def test_load_refuses_before_the_store_is_touched(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        with patch.object(ds, "_store") as store, pytest.raises(UndeclaredReadError):
+            ds.load("tradestation", "AAPL", "1m", self.START, self.END)
+        assert store.mock_calls == []
+
+    def test_iter_batches_refuses_before_the_store_is_touched(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        with patch.object(ds, "_store") as store, pytest.raises(UndeclaredReadError):
+            next(ds.iter_batches("tradestation", "AAPL", "1m", self.START, self.END))
+        assert store.mock_calls == []
+
+    def test_fetch_refuses_before_the_provider_is_touched(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            patch.object(ds, "_store") as store,
+            pytest.raises(UndeclaredReadError),
+        ):
+            ds.fetch("tradestation", "AAPL", self.START, self.END, timeframe="1m")
+        get_provider.assert_not_called()
+        assert store.mock_calls == []
+
+    def test_fetch_corporate_actions_refuses_before_the_provider_is_touched(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+        with (
+            patch.object(ds, "_get_corporate_actions_provider") as get_provider,
+            pytest.raises(UndeclaredReadError),
+        ):
+            ds.fetch_corporate_actions("tradestation", "AAPL", self.START, self.END)
+        get_provider.assert_not_called()
+
+    def test_fetch_adjustment_factors_refuses_before_the_provider_is_touched(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            pytest.raises(UndeclaredReadError),
+        ):
+            ds.fetch_adjustment_factors("tradestation", "AAPL", self.START, self.END)
+        get_provider.assert_not_called()
+
+    def test_backfill_refuses_before_store_or_provider_is_touched(self, tmp_path: Path) -> None:
+        """backfill returns market values and reads the store before it fetches,
+        so its refusal has to precede both."""
+        self._bars(tmp_path)
+        ds = DataService(data_root=tmp_path)
+        with (
+            patch.object(ds, "_get_provider") as get_provider,
+            patch.object(ds, "_store") as store,
+            pytest.raises(UndeclaredReadError),
+        ):
+            ds.backfill("tradestation", "AAPL", self.START, self.END, "1m")
+        get_provider.assert_not_called()
+        assert store.mock_calls == []
+
+    @pytest.mark.parametrize("method", ["validate", "info", "stats"])
+    def test_derived_read_paths_refuse_before_the_store_is_touched(
+        self, tmp_path: Path, method: str
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+        with patch.object(ds, "_store") as store, pytest.raises(UndeclaredReadError):
+            getattr(ds, method)("tradestation", "AAPL", "1m")
+        assert store.mock_calls == []
+
+    def test_gaps_refuses_before_the_store_is_touched(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        with patch.object(ds, "_store") as store, pytest.raises(UndeclaredReadError):
+            ds.gaps("tradestation", "AAPL", "1m", 1)
+        assert store.mock_calls == []
+
+    def test_refusal_message_names_the_missing_declaration(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        with pytest.raises(UndeclaredReadError, match="declares no purpose"):
+            ds.load("tradestation", "AAPL", "1m", self.START, self.END)
+
+
+class TestUndeclaredReadIsNotAFoldViolation:
+    """ "You didn't say" and "you may not" must be separable by type.
+
+    A reader of a traceback, and an ``except`` clause, must be able to tell a
+    missing declaration from a fold-boundary refusal without matching on
+    message text.
+    """
+
+    ARM = "liq_data_default_deny_tests"
+
+    def test_the_two_types_are_unrelated_by_inheritance(self) -> None:
+        assert not issubclass(UndeclaredReadError, LockboxViolationError)
+        assert not issubclass(LockboxViolationError, UndeclaredReadError)
+
+    def test_catching_undeclared_does_not_catch_a_fold_violation(self, tmp_path: Path) -> None:
+        """2021 precedes the frozen 2022 crypto-futures discovery start, so this
+        declared read is a genuine fold violation and must escape a handler that
+        only expects a missing declaration."""
+        ds = DataService(data_root=tmp_path)
+        with pytest.raises(LockboxViolationError) as excinfo:
+            try:
+                ds.load(
+                    "tradestation",
+                    "@MBT",
+                    "1d",
+                    date(2021, 1, 1),
+                    date(2021, 12, 31),
+                    purpose="discovery",
+                    arm_id=self.ARM,
+                    asset_class="future",
+                )
+            except UndeclaredReadError as wrong:  # pragma: no cover - must not fire
+                raise AssertionError("fold violation was caught as an undeclared read") from wrong
+        assert not isinstance(excinfo.value, UndeclaredReadError)
+
+    def test_catching_fold_violations_does_not_catch_an_undeclared_read(
+        self, tmp_path: Path
+    ) -> None:
+        ds = DataService(data_root=tmp_path)
+        with pytest.raises(UndeclaredReadError) as excinfo:
+            try:
+                ds.load("tradestation", "@MBT", "1d", date(2021, 1, 1), date(2021, 12, 31))
+            except LockboxViolationError as wrong:  # pragma: no cover - must not fire
+                raise AssertionError("undeclared read was caught as a fold violation") from wrong
+        assert not isinstance(excinfo.value, LockboxViolationError)
+
+
+class TestDerivedReadPathsCanDeclare:
+    """``validate``/``info``/``stats``/``gaps``/``backfill`` take and forward a
+    declaration, and the declared read reaches the ledger."""
+
+    ARM = "liq_data_service_diagnostics"
+
+    @staticmethod
+    def _bars(tmp_path: Path) -> None:
+        write_test_data(
+            tmp_path,
+            "tradestation",
+            "AAPL",
+            "1m",
+            pl.DataFrame(
+                {
+                    "timestamp": [
+                        datetime(2023, 1, 3, 14, 30, tzinfo=UTC),
+                        datetime(2023, 1, 3, 14, 31, tzinfo=UTC),
+                    ],
+                    "open": [1.0, 1.1],
+                    "high": [1.2, 1.3],
+                    "low": [0.9, 1.0],
+                    "close": [1.1, 1.2],
+                    "volume": [100, 110],
+                }
+            ),
+        )
+
+    @staticmethod
+    def _log_entries(tmp_path: Path) -> list[dict]:
+        log = tmp_path / "lockbox_usage_log.jsonl"
+        if not log.exists():
+            return []
+        return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+
+    @pytest.mark.parametrize("method", ["validate", "info", "stats"])
+    def test_declared_derived_read_is_ledgered(self, tmp_path: Path, method: str) -> None:
+        self._bars(tmp_path)
+        ds = DataService(data_root=tmp_path)
+        getattr(ds, method)("tradestation", "AAPL", "1m", purpose="dev_smoke", arm_id=self.ARM)
+        entries = self._log_entries(tmp_path)
+        assert [e["arm_id"] for e in entries] == [self.ARM]
+        assert entries[0]["purpose"] == "dev_smoke"
+        assert entries[0]["dataset"] == "tradestation_cohort_1m"
+
+    def test_declared_gaps_read_is_ledgered(self, tmp_path: Path) -> None:
+        self._bars(tmp_path)
+        ds = DataService(data_root=tmp_path)
+        ds.gaps("tradestation", "AAPL", "1m", 1, purpose="dev_smoke", arm_id=self.ARM)
+        entries = self._log_entries(tmp_path)
+        assert [e["arm_id"] for e in entries] == [self.ARM]
+
+    def test_declared_backfill_is_ledgered_and_bounded(self, tmp_path: Path) -> None:
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.fetch_bars.return_value = pl.DataFrame(
+            {
+                "timestamp": [datetime(2023, 1, 3, 14, 30, tzinfo=UTC)],
+                "open": [1.0],
+                "high": [1.2],
+                "low": [0.9],
+                "close": [1.1],
+                "volume": [100],
+            }
+        )
+        with patch.object(ds, "_get_provider", return_value=provider):
+            ds.backfill(
+                "tradestation",
+                "AAPL",
+                date(2023, 1, 2),
+                date(2023, 1, 31),
+                "1m",
+                purpose="dev_smoke",
+                arm_id=self.ARM,
+            )
+        entries = self._log_entries(tmp_path)
+        # Two entries: backfill guards its own window, then delegates the
+        # empty-store case to ``fetch``, which guards again.
+        assert {e["arm_id"] for e in entries} == {self.ARM}
+        assert {(e["start"], e["end"]) for e in entries} == {("2023-01-02", "2023-01-31")}
+
+    def test_declared_backfill_over_existing_bars_is_still_guarded(self, tmp_path: Path) -> None:
+        """The gap-filling branch reads the provider directly rather than
+        through ``fetch``; it must still be declared and ledgered."""
+        self._bars(tmp_path)
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.fetch_bars.return_value = pl.DataFrame()
+        with patch.object(ds, "_get_provider", return_value=provider):
+            ds.backfill(
+                "tradestation",
+                "AAPL",
+                date(2023, 1, 2),
+                date(2023, 1, 31),
+                "1m",
+                purpose="dev_smoke",
+                arm_id=self.ARM,
+            )
+        entries = self._log_entries(tmp_path)
+        assert [e["arm_id"] for e in entries] == [self.ARM]
+
+    def test_unbounded_derived_read_refuses_a_research_purpose(self, tmp_path: Path) -> None:
+        """Condition 5: the unbounded relaxation reaches ``dev_smoke`` only."""
+        self._bars(tmp_path)
+        ds = DataService(data_root=tmp_path)
+        with pytest.raises(ValueError, match="start and end"):
+            ds.stats("tradestation", "AAPL", "1m", purpose="discovery", arm_id=self.ARM)
+
+
+class _NamedProvider:
+    """Minimal provider double that reports a venue the way a real one does."""
+
+    def __init__(self, name: str, bars: pl.DataFrame | None = None) -> None:
+        self._name = name
+        self._bars = bars if bars is not None else _one_bar()
+        self.fetch_calls = 0
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def fetch_bars(self, *args: object, **kwargs: object) -> pl.DataFrame:
+        self.fetch_calls += 1
+        return self._bars
+
+
+def _one_bar() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "timestamp": [datetime(2024, 1, 15, tzinfo=UTC)],
+            "open": [42000.0],
+            "high": [42500.0],
+            "low": [41500.0],
+            "close": [42200.0],
+            "volume": [100.0],
+        }
+    )
+
+
+class TestOneVenueOneStorageKey:
+    """A bar is reachable under exactly one key, and that key names its venue.
+
+    The defect this closes was documented in this workspace in February 2026 and
+    shipped unrouted: ``DataService`` builds the storage key from the caller's
+    provider string, never from the resolved provider's ``name``, so the venue a
+    fetch contacted reached no storage decision at all. Stored bars carry no
+    venue provenance, so nothing downstream could ever detect the mislabel.
+    """
+
+    SMOKE: _SmokeRead = {"purpose": "dev_smoke", "arm_id": "liq_data_venue_tests"}
+
+    def test_binance_key_admits_a_binance_us_fetch(self, tmp_path: Path) -> None:
+        """The measured truth: this key's tree holds Binance.US bars.
+
+        Under ``BINANCE_USE_US=true`` the provider reports ``binance_us`` while
+        the caller writes under ``binance``. That used to be a silent mislabel.
+        It is now the key's recorded venue, so the write is truthful and the
+        venue stays in one key rather than being split across two.
+        """
+        ds = DataService(data_root=tmp_path)
+        provider = _NamedProvider("binance_us")
+
+        with patch.object(ds, "_get_provider", return_value=provider):
+            ds.fetch(
+                "binance", "BTC_USDT", date(2024, 1, 15), date(2024, 1, 15), "1m", **self.SMOKE
+            )
+
+        assert provider.fetch_calls == 1
+        assert ds.store.exists(f"binance/{key_builder.bars('BTC_USDT', '1m')}")
+
+    def test_binance_key_refuses_a_binance_com_fetch(self, tmp_path: Path) -> None:
+        """No market mixing: the plan of record forbids it for this surface.
+
+        ``api.binance.com`` returns HTTP 451 from this environment today, which
+        is a location fact and not a control. If it ever lifts, a default-settings
+        fetch would pool Binance.com bars into a dataset measured to hold
+        Binance.US ones, under fold windows and a cost scenario written for
+        neither.
+        """
+        ds = DataService(data_root=tmp_path)
+        provider = _NamedProvider("binance")
+
+        with (
+            patch.object(ds, "_get_provider", return_value=provider),
+            pytest.raises(StorageVenueMismatchError, match="binance_us"),
+        ):
+            ds.fetch(
+                "binance", "BTC_USDT", date(2024, 1, 15), date(2024, 1, 15), "1m", **self.SMOKE
+            )
+
+        assert provider.fetch_calls == 0
+        assert not ds.store.exists(f"binance/{key_builder.bars('BTC_USDT', '1m')}")
+
+    def test_refusal_precedes_the_provider_call(self, tmp_path: Path) -> None:
+        """The venue is refused before the network is touched, not after."""
+        ds = DataService(data_root=tmp_path)
+        provider = _NamedProvider("coinbase")
+
+        with (
+            patch.object(ds, "_get_provider", return_value=provider),
+            pytest.raises(StorageVenueMismatchError),
+        ):
+            ds.fetch("oanda", "EUR_USD", date(2024, 1, 15), date(2024, 1, 15), "1m", **self.SMOKE)
+
+        assert provider.fetch_calls == 0
+
+    def test_backfill_is_guarded_too(self, tmp_path: Path) -> None:
+        """``backfill`` reaches the provider directly on its gap-filling branch."""
+        write_test_data(
+            tmp_path,
+            "binance",
+            "BTC_USDT",
+            "1m",
+            pl.DataFrame(
+                {
+                    "timestamp": [
+                        datetime(2024, 1, 15, 0, 0, tzinfo=UTC),
+                        datetime(2024, 1, 15, 0, 5, tzinfo=UTC),
+                    ],
+                    "open": [1.0, 1.0],
+                    "high": [1.0, 1.0],
+                    "low": [1.0, 1.0],
+                    "close": [1.0, 1.0],
+                    "volume": [1.0, 1.0],
+                }
+            ),
+        )
+        ds = DataService(data_root=tmp_path)
+        provider = _NamedProvider("binance")
+
+        with (
+            patch.object(ds, "_get_provider", return_value=provider),
+            pytest.raises(StorageVenueMismatchError),
+        ):
+            ds.backfill(
+                "binance",
+                "BTC_USDT",
+                date(2024, 1, 15),
+                date(2024, 1, 16),
+                "1m",
+                **self.SMOKE,
+            )
+
+        assert provider.fetch_calls == 0
+
+    def test_ordinary_providers_keep_key_equals_venue(self, tmp_path: Path) -> None:
+        """No recorded exception means the plain rule, and it is the default."""
+        ds = DataService(data_root=tmp_path)
+        provider = _NamedProvider("oanda")
+
+        with patch.object(ds, "_get_provider", return_value=provider):
+            ds.fetch("oanda", "EUR_USD", date(2024, 1, 15), date(2024, 1, 15), "1m", **self.SMOKE)
+
+        assert provider.fetch_calls == 1
+
+    def test_binance_us_cannot_be_populated_by_ingestion(self, tmp_path: Path) -> None:
+        """The second key must not come into existence, so it is not ingestable.
+
+        ``binance_us`` is now fold-governed, but a governed name is not a store
+        key: no factory builds it, so ``fetch`` refuses with the clearer
+        "Unknown provider" diagnostic that already existed. Together with the
+        prohibition on copying or aliasing bars between keys, that is what keeps
+        one venue in one key.
+        """
+        ds = DataService(data_root=tmp_path)
+        assert "binance_us" not in DataService._PROVIDER_FACTORIES
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            ds.fetch(
+                "binance_us",
+                "BTC_USDT",
+                date(2024, 1, 15),
+                date(2024, 1, 15),
+                "1m",
+                **self.SMOKE,
+            )
+        assert not (tmp_path / "binance_us").exists()
+
+    def test_the_real_binance_provider_reports_the_names_this_relies_on(self) -> None:
+        """The venue check is only as good as the name the provider reports.
+
+        One class, one boolean, two names. Asserted here rather than assumed,
+        because every other assertion in this class depends on it.
+        """
+        assert BinanceProvider(use_us=True).name == "binance_us"
+        assert BinanceProvider(use_us=False).name == "binance"
+
+    def test_sync_is_guarded_too(self, tmp_path: Path) -> None:
+        """``sync`` writes bars under a caller-chosen key like the others.
+
+        Enforcing the invariant on ``fetch`` and ``backfill`` alone would leave
+        the same hole in a different shape.
+        """
+        ds = DataService(data_root=tmp_path)
+        provider = _NamedProvider("binance")
+
+        with (
+            patch.object(ds, "_get_provider", return_value=provider),
+            pytest.raises(StorageVenueMismatchError),
+        ):
+            ds.sync(
+                UniverseDefinition(
+                    name="venue-check",
+                    version=1,
+                    kind=UniverseKind.EXPLICIT,
+                    spec={"symbols": ["BTC_USDT"]},
+                ),
+                start=date(2024, 1, 15),
+                end=date(2024, 1, 16),
+                provider="binance",
+                timeframe="1m",
+                dataset="spot",
+            )
+
+        assert provider.fetch_calls == 0
+
+    def test_a_double_without_a_string_name_is_not_checked(self, tmp_path: Path) -> None:
+        """The documented tolerance, asserted rather than left to be discovered."""
+        ds = DataService(data_root=tmp_path)
+        provider = MagicMock()
+        provider.fetch_bars.return_value = _one_bar()
+
+        with patch.object(ds, "_get_provider", return_value=provider):
+            ds.fetch(
+                "binance", "BTC_USDT", date(2024, 1, 15), date(2024, 1, 15), "1m", **self.SMOKE
+            )
+
+        provider.fetch_bars.assert_called_once()

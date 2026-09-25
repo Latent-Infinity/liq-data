@@ -9,6 +9,17 @@ Design Principles:
     - DIP: Depends on abstractions (MarketDataProvider protocol), not implementations
     - DRY: Uses liq-store for all storage operations (single source of truth)
 
+Declaring reads:
+    Every entry point that can return market values is default-deny. A read
+    must declare what it is for -- ``purpose`` plus ``arm_id`` -- or it is
+    refused with :class:`~liq.data.exceptions.UndeclaredReadError` before any
+    store or provider is touched. Research reads declare one of
+    ``discovery`` / ``validation`` / ``characterization`` / ``forward_accrual``
+    and are checked against the lockbox ledger's fold windows. Reads that are
+    not research -- ingestion, fixture builds, diagnostics -- declare
+    ``dev_smoke`` and name the component in the free-form ``arm_id``;
+    ``dev_smoke`` reads are logged and are never research evidence.
+
 Example:
     from liq.data import DataService
     from datetime import date
@@ -17,16 +28,24 @@ Example:
     ds = DataService()
 
     # Fetch data from provider
-    df = ds.fetch("oanda", "EUR_USD", date(2024, 1, 1), date(2024, 1, 31))
+    df = ds.fetch(
+        "oanda", "EUR_USD", date(2024, 1, 1), date(2024, 1, 31),
+        purpose="dev_smoke", arm_id="my_component",
+    )
 
     # Load existing data
-    df = ds.load("oanda", "EUR_USD", "1m")
+    df = ds.load(
+        "oanda", "EUR_USD", "1m", date(2024, 1, 1), date(2024, 1, 31),
+        purpose="discovery", arm_id="idea_05a",
+    )
 
-    # List available data
+    # List available data (metadata only; no declaration needed)
     available = ds.list_symbols()
 
     # Validate data integrity
-    result = ds.validate("oanda", "EUR_USD", "1m")
+    result = ds.validate(
+        "oanda", "EUR_USD", "1m", purpose="dev_smoke", arm_id="my_component"
+    )
 """
 
 from __future__ import annotations
@@ -47,9 +66,23 @@ import polars as pl
 from filelock import FileLock, Timeout
 
 from liq.data.aggregation import aggregate_bars
-from liq.data.exceptions import LockboxViolationError, ProviderNoDataError, SchemaValidationError
+from liq.data.exceptions import (
+    LockboxViolationError,
+    ProviderNoDataError,
+    SchemaValidationError,
+    StorageVenueMismatchError,
+    UnclassifiedProviderError,
+    UndeclaredReadError,
+)
 from liq.data.gaps import detect_gaps
-from liq.data.lockbox import USAGE_LOG_FILENAME, LockboxGuard, LockboxLedger, resolve_dataset
+from liq.data.lockbox import (
+    RESEARCH_PURPOSES,
+    UNGOVERNED_PROVIDERS,
+    USAGE_LOG_FILENAME,
+    LockboxGuard,
+    LockboxLedger,
+    declared_storage_venue,
+)
 from liq.data.policies import POLICIES
 from liq.data.protocols import BatchJob, BatchMarketDataProvider, CorporateActionsProvider
 from liq.data.providers.databento import SCHEMA_BY_TIMEFRAME
@@ -88,6 +121,27 @@ if TYPE_CHECKING:
     from liq.data.protocols import MarketDataProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _require_declared_purpose(purpose: str | None, entry_point: str) -> str:
+    """Refuse a read that declares no ``purpose``, before anything is read.
+
+    The guard is default-deny: what a read is for is not optional information.
+    The raised type is deliberately distinct from
+    :class:`~liq.data.exceptions.LockboxViolationError`, because "you did not
+    say" and "you may not" are different facts.
+
+    Returns the declared purpose so callers carry a non-optional value onward.
+    """
+    if purpose is None:
+        raise UndeclaredReadError(
+            f"{entry_point} declares no purpose and is refused: pass purpose= and "
+            f"arm_id=. Research reads declare one of {sorted(RESEARCH_PURPOSES)}; "
+            "reads that are not research declare 'dev_smoke' and name the "
+            "component in arm_id. This is a missing declaration, not a "
+            "fold-boundary violation."
+        )
+    return purpose
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,15 +327,25 @@ class DataService:
         timeframe: str | None = None,
         data_kind: str = "bars",
     ) -> None:
-        """Route a declared-purpose read through the lockbox guard."""
+        """Route a read through the lockbox guard; refuse an undeclared one.
+
+        There is no path through this method that serves a read with no
+        declared ``purpose``. The public entry points refuse first, so the
+        refusal here is the backstop for any future internal caller.
+
+        There is also no path that serves a read leaving no record. A read the
+        active ledger governs goes to ``assert_period_allowed``; one it does not
+        goes to :meth:`_guard_ungoverned_read`, which refuses an unclassified
+        provider under a research purpose and logs everything it serves. The
+        guarantee the declaration buys -- that the read is visible -- did not
+        previously hold for a provider outside the mapping, however correct the
+        declaration was.
+        """
+        declared_purpose = _require_declared_purpose(purpose, "this read")
         if asset_class == "short_interest_book":
             if provider.lower() != "tradestation":
                 raise LockboxViolationError(
                     "short_interest_book coverage authorization admits TradeStation only"
-                )
-            if purpose is None:
-                raise LockboxViolationError(
-                    "short_interest_book coverage requires a declared characterization purpose"
                 )
             if data_kind != "bar_coverage":
                 raise LockboxViolationError(
@@ -292,19 +356,70 @@ class DataService:
                     "short_interest_book coverage research reads admit daily bars only "
                     "(timeframe='1d')"
                 )
-        if purpose is None:
-            return
         if asset_class == "index_recon_book" and data_kind == "bars" and timeframe != "1d":
             raise LockboxViolationError(
                 "index_recon_book research reads admit daily bars only (timeframe='1d')"
             )
         if not arm_id:
             raise ValueError("arm_id is required when a research purpose is declared")
-        dataset = resolve_dataset(provider, symbol, asset_class=asset_class)
+        dataset = self.lockbox_guard.classify_read(provider, symbol, asset_class=asset_class)
         if dataset is None:
+            self._guard_ungoverned_read(
+                provider,
+                start,
+                end,
+                purpose=declared_purpose,
+                arm_id=arm_id,
+                final_portfolio_review=final_portfolio_review,
+            )
             return
         self.lockbox_guard.assert_period_allowed(
             dataset,
+            start,
+            end,
+            purpose=declared_purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
+        )
+
+    def _guard_ungoverned_read(
+        self,
+        provider: str,
+        start: date | None,
+        end: date | None,
+        *,
+        purpose: str,
+        arm_id: str,
+        final_portfolio_review: bool,
+    ) -> None:
+        """Refuse or record a read no ledger dataset governs.
+
+        The provider is either deliberately ungoverned -- on
+        :data:`~liq.data.lockbox.UNGOVERNED_PROVIDERS` with a stated reason -- or
+        unclassified, meaning nobody has decided. A research read of an
+        unclassified provider is refused here, before any store or provider is
+        touched, because serving it is what let a declared research read escape
+        every control and leave no trace.
+
+        The refusal is scoped to research purposes deliberately. ``dev_smoke``
+        is served and logged, which keeps ingestion, fixture builds and
+        diagnostics working, and leaves ``_get_provider``'s more specific
+        "Unknown provider" diagnostic in front of a genuinely misspelled
+        provider name rather than displacing it with a governance message.
+        """
+        if purpose in RESEARCH_PURPOSES and provider.lower() not in UNGOVERNED_PROVIDERS:
+            raise UnclassifiedProviderError(
+                f"provider '{provider}' is classified by nothing: it is outside "
+                "resolve_dataset's ledger mapping and is not on the ungoverned "
+                f"allow-list {sorted(UNGOVERNED_PROVIDERS)}, so a '{purpose}' read of "
+                "it cannot be checked against any fold window. This is neither a "
+                "missing declaration nor a fold-boundary violation: nobody has "
+                "classified this provider. Classifying it is a governance decision, "
+                "not a code change; a read that is not research declares 'dev_smoke' "
+                "and is served and logged."
+            )
+        self.lockbox_guard.record_ungoverned_read(
+            provider,
             start,
             end,
             purpose=purpose,
@@ -315,6 +430,49 @@ class DataService:
     def _storage_key(self, provider: str, symbol: str, timeframe: str) -> str:
         """Build storage key for bars via provider/key_builder."""
         return f"{provider}/{key_builder.bars(symbol, timeframe)}"
+
+    @staticmethod
+    def _assert_storage_key_holds_one_venue(
+        storage_provider: str, provider: MarketDataProvider
+    ) -> None:
+        """Refuse an ingest that would write a venue's bars under another's key.
+
+        Called from every path that writes provider bars under a caller-chosen
+        key: ``fetch``, ``backfill``, ``sync`` and ``sync_batch``. Enforcing it
+        on some of them would leave the same hole in a different shape.
+
+        One venue, one key. The storage key comes from the caller's argument and
+        the venue from ``settings``, so the two are chosen independently and the
+        store cannot tell them apart afterwards: bars carry no venue provenance,
+        and the only documented way the mismatch has ever surfaced is an
+        engineering note written seven months before anybody acted on it.
+
+        The declared venue for a key defaults to the key's own name, so this is
+        ordinarily provider-name equality. ``STORAGE_KEY_VENUES`` records the one
+        measured exception -- the ``binance`` tree holds Binance.US bars -- which
+        makes a truthful Binance.US write pass and a Binance.com write under the
+        same key fail as market mixing.
+
+        A provider that does not report a ``str`` name is a test double, not a
+        venue; the check has nothing to compare and skips rather than inventing
+        an answer. That tolerance and the one name it depends on are both
+        pinned in ``TestOneVenueOneStorageKey``, so neither can quietly grow
+        into a hole.
+        """
+        contacted = getattr(provider, "name", None)
+        if not isinstance(contacted, str):
+            return
+        declared = declared_storage_venue(storage_provider)
+        if contacted.lower() == declared:
+            return
+        raise StorageVenueMismatchError(
+            f"storage key '{storage_provider.lower()}' is declared to hold "
+            f"'{declared}' bars, but the constructed provider contacted "
+            f"'{contacted.lower()}'. Writing them under this key would put two "
+            "venues in one dataset, which nothing downstream could detect: "
+            "stored bars carry no venue provenance. Fix the provider settings "
+            "or the key; do not copy or alias bars between keys."
+        )
 
     def _keep_bars_before_span(self, storage_key: str, aggregated: pl.DataFrame) -> pl.DataFrame:
         """Prepend cached bars that predate a rebuilt aggregate's span.
@@ -432,11 +590,12 @@ class DataService:
             columns: Optional column subset
             streaming: Use Polars streaming engine (memory-efficient)
             batch_size: If set, yield DataFrames in batches
-            purpose: Research purpose of the read (e.g., "discovery",
-                "validation", "dev_smoke"). Declaring a purpose routes the
-                read through the lockbox guard; research reads MUST declare
-                one. Reads without a purpose are never research evidence.
-            arm_id: Research arm consuming the read (required with purpose)
+            purpose: Required research purpose of the read: one of
+                "discovery", "validation", "characterization",
+                "forward_accrual", or "dev_smoke" for reads that are not
+                research. Routes the read through the lockbox guard.
+            arm_id: Required research arm, or the component name for a
+                ``dev_smoke`` read
             final_portfolio_review: Human-only flag permitting program-lockbox
                 reads; recorded in the usage log
             asset_class: Optional asset class discriminating fold governance for
@@ -448,14 +607,19 @@ class DataService:
             DataFrame with OHLCV data
 
         Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                store is touched)
             FileNotFoundError: If data doesn't exist
             LockboxViolationError: If a declared-purpose read violates the
                 lockbox ledger fold boundaries
 
         Example:
             >>> ds = DataService()
-            >>> df = ds.load("oanda", "EUR_USD", "1m")
+            >>> df = ds.load(
+            ...     "oanda", "EUR_USD", "1m", purpose="dev_smoke", arm_id="demo"
+            ... )
         """
+        _require_declared_purpose(purpose, "DataService.load")
         self._guard_research_read(
             provider,
             symbol,
@@ -542,7 +706,13 @@ class DataService:
         arm_id: str | None = None,
         final_portfolio_review: bool = False,
     ) -> Iterator[pl.DataFrame]:
-        """Iterate over data in batches for memory-efficient processing."""
+        """Iterate over data in batches for memory-efficient processing.
+
+        Refuses an undeclared read on first iteration -- which is the moment
+        this generator would otherwise touch the store -- so no batch is ever
+        served without a declaration.
+        """
+        _require_declared_purpose(purpose, "DataService.iter_batches")
         result = self.load(
             provider,
             symbol,
@@ -621,9 +791,11 @@ class DataService:
                 securities reachable only on a specific venue dataset (e.g. a
                 delisted name on ``XNAS.ITCH``). Ignored by providers that do
                 not accept it.
-            purpose: Research purpose of the provider read. Declared research
-                fetches route through the same lockbox guard as stored reads.
-            arm_id: Research arm consuming the read (required with purpose).
+            purpose: Required purpose of the provider read; fetches route
+                through the same lockbox guard as stored reads. Ingestion
+                declares ``dev_smoke``.
+            arm_id: Required research arm, or the component name for a
+                ``dev_smoke`` fetch.
             final_portfolio_review: Human-only program-lockbox override.
             asset_class: Optional fold discriminator, such as ``future`` for
                 TradeStation crypto futures.
@@ -631,11 +803,19 @@ class DataService:
         Returns:
             DataFrame with fetched OHLCV data
 
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                provider is contacted)
+
         Example:
             >>> from datetime import date
             >>> ds = DataService()
-            >>> df = ds.fetch("oanda", "EUR_USD", date(2024, 1, 1), date(2024, 1, 31))
+            >>> df = ds.fetch(
+            ...     "oanda", "EUR_USD", date(2024, 1, 1), date(2024, 1, 31),
+            ...     purpose="dev_smoke", arm_id="demo",
+            ... )
         """
+        _require_declared_purpose(purpose, "DataService.fetch")
         if end is None:
             end = date.today()
 
@@ -652,6 +832,7 @@ class DataService:
         )
 
         prov = self._get_provider(provider)
+        self._assert_storage_key_holds_one_venue(provider, prov)
         extra = {"dataset": dataset} if dataset is not None else {}
         df = prov.fetch_bars(symbol, start, end, timeframe=timeframe, **extra)
         validate_ohlc(df)
@@ -758,7 +939,13 @@ class DataService:
         final_portfolio_review: bool = False,
         asset_class: str | None = None,
     ) -> list[Any]:
-        """Fetch corporate actions through the research guard when declared."""
+        """Fetch corporate actions through the research guard.
+
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                provider is contacted).
+        """
+        _require_declared_purpose(purpose, "DataService.fetch_corporate_actions")
         self._guard_research_read(
             provider,
             symbol,
@@ -789,7 +976,13 @@ class DataService:
         final_portfolio_review: bool = False,
         asset_class: str | None = None,
     ) -> list[Any]:
-        """Fetch adjustment factors through the research guard when declared."""
+        """Fetch adjustment factors through the research guard.
+
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                provider is contacted).
+        """
+        _require_declared_purpose(purpose, "DataService.fetch_adjustment_factors")
         self._guard_research_read(
             provider,
             symbol,
@@ -827,18 +1020,60 @@ class DataService:
         start: date,
         end: date,
         timeframe: str,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        final_portfolio_review: bool = False,
+        asset_class: str | None = None,
     ) -> pl.DataFrame:
-        """Fetch only missing ranges based on gaps in stored data."""
+        """Fetch only missing ranges based on gaps in stored data.
+
+        Returns market values, so it carries the same declaration as any other
+        read. The guard runs before the stored series is read and before any
+        gap-filling branch reaches the provider directly rather than through
+        :meth:`fetch`; ingestion declares ``dev_smoke``. The empty-store branch
+        delegates to :meth:`fetch`, which guards again, so that branch leaves
+        two ledger entries for the same window -- over-reporting a read is the
+        safe direction for an append-only usage log.
+
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                store or provider is touched).
+        """
+        _require_declared_purpose(purpose, "DataService.backfill")
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=final_portfolio_review,
+            asset_class=asset_class,
+            timeframe=timeframe,
+        )
         storage_key = self._storage_key(provider, symbol, timeframe)
         existing = (
             self._store.read(storage_key) if self._store.exists(storage_key) else pl.DataFrame()
         )
-        prov = self._get_provider(provider)
 
         if existing.is_empty():
             return self.fetch(
-                provider, symbol, start, end, timeframe=timeframe, save=True, mode="append"
+                provider,
+                symbol,
+                start,
+                end,
+                timeframe=timeframe,
+                save=True,
+                mode="append",
+                purpose=purpose,
+                arm_id=arm_id,
+                final_portfolio_review=final_portfolio_review,
+                asset_class=asset_class,
             )
+
+        prov = self._get_provider(provider)
+        self._assert_storage_key_holds_one_venue(provider, prov)
 
         # If we have too few points to infer gaps, refetch the range
         if existing.height < 2:
@@ -884,13 +1119,26 @@ class DataService:
         )
         return combined
 
-    def validate(self, provider: str, symbol: str, timeframe: str) -> dict[str, Any]:
+    def validate(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+    ) -> dict[str, Any]:
         """Validate data integrity.
 
         Args:
             provider: Provider name
             symbol: Symbol name
             timeframe: Timeframe
+            purpose: Required purpose of the underlying read. This reads the
+                whole stored series, so it is unbounded and admits
+                ``dev_smoke`` only; a research purpose is refused for want of
+                bounds rather than given invented ones.
+            arm_id: Required component or arm name, recorded in the usage log
 
         Returns:
             Dict with validation results:
@@ -899,13 +1147,20 @@ class DataService:
                 - null_count: Number of null values
                 - errors: List of error messages
 
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                store is touched)
+
         Example:
             >>> ds = DataService()
-            >>> result = ds.validate("oanda", "EUR_USD", "1m")
+            >>> result = ds.validate(
+            ...     "oanda", "EUR_USD", "1m", purpose="dev_smoke", arm_id="demo"
+            ... )
             >>> result["valid"]
             True
         """
-        df = self.load(provider, symbol, timeframe)
+        _require_declared_purpose(purpose, "DataService.validate")
+        df = self.load(provider, symbol, timeframe, purpose=purpose, arm_id=arm_id)
 
         null_count = sum(df[col].null_count() for col in df.columns)
         dup_count = 0
@@ -934,13 +1189,24 @@ class DataService:
             errors.append(str(exc))
         return result
 
-    def info(self, provider: str, symbol: str, timeframe: str) -> dict[str, Any]:
+    def info(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+    ) -> dict[str, Any]:
         """Get data metadata.
 
         Args:
             provider: Provider name
             symbol: Symbol name
             timeframe: Timeframe
+            purpose: Required purpose of the underlying read. Unbounded, so it
+                admits ``dev_smoke`` only.
+            arm_id: Required component or arm name, recorded in the usage log
 
         Returns:
             Dict with metadata:
@@ -949,14 +1215,21 @@ class DataService:
                 - start: First timestamp (date)
                 - end: Last timestamp (date)
 
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                store is touched)
+
         Example:
             >>> ds = DataService()
-            >>> info = ds.info("oanda", "EUR_USD", "1m")
+            >>> info = ds.info(
+            ...     "oanda", "EUR_USD", "1m", purpose="dev_smoke", arm_id="demo"
+            ... )
             >>> info["row_count"]
             1000000
         """
+        _require_declared_purpose(purpose, "DataService.info")
         storage_key = self._storage_key(provider, symbol, timeframe)
-        df = self.load(provider, symbol, timeframe)
+        df = self.load(provider, symbol, timeframe, purpose=purpose, arm_id=arm_id)
 
         result: dict[str, Any] = {
             "row_count": len(df),
@@ -971,25 +1244,43 @@ class DataService:
 
         return result
 
-    def stats(self, provider: str, symbol: str, timeframe: str) -> dict[str, Any]:
+    def stats(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+    ) -> dict[str, Any]:
         """Get statistical summary of data.
 
         Args:
             provider: Provider name
             symbol: Symbol name
             timeframe: Timeframe
+            purpose: Required purpose of the underlying read. Unbounded, so it
+                admits ``dev_smoke`` only.
+            arm_id: Required component or arm name, recorded in the usage log
 
         Returns:
             Dict with statistics for each numeric column:
                 - mean, min, max, std, count
 
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                store is touched)
+
         Example:
             >>> ds = DataService()
-            >>> stats = ds.stats("oanda", "EUR_USD", "1m")
+            >>> stats = ds.stats(
+            ...     "oanda", "EUR_USD", "1m", purpose="dev_smoke", arm_id="demo"
+            ... )
             >>> stats["close"]["mean"]
             1.0875
         """
-        df = self.load(provider, symbol, timeframe)
+        _require_declared_purpose(purpose, "DataService.stats")
+        df = self.load(provider, symbol, timeframe, purpose=purpose, arm_id=arm_id)
 
         result: dict[str, Any] = {}
         for col in df.columns:
@@ -1044,10 +1335,26 @@ class DataService:
         return self._store.exists(storage_key)
 
     def gaps(
-        self, provider: str, symbol: str, timeframe: str, expected_minutes: int
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        expected_minutes: int,
+        *,
+        purpose: str | None = None,
+        arm_id: str | None = None,
     ) -> list[tuple[Any, Any]]:
-        """Detect gaps for a symbol/timeframe using expected minutes."""
-        df = self.load(provider, symbol, timeframe)
+        """Detect gaps for a symbol/timeframe using expected minutes.
+
+        Reads the whole stored series, so it is unbounded and admits
+        ``dev_smoke`` only.
+
+        Raises:
+            UndeclaredReadError: If no purpose is declared (raised before the
+                store is touched).
+        """
+        _require_declared_purpose(purpose, "DataService.gaps")
+        df = self.load(provider, symbol, timeframe, purpose=purpose, arm_id=arm_id)
         if df.is_empty():
             return []
         return detect_gaps(df, timedelta(minutes=expected_minutes))
@@ -1374,6 +1681,7 @@ class DataService:
 
         try:
             prov = self._get_provider(provider)
+            self._assert_storage_key_holds_one_venue(provider, prov)
             policy = POLICIES.get(provider)
             rate_limiter = RateLimiter(
                 requests_per_minute=policy.requests_per_minute if policy else None,
@@ -1663,6 +1971,7 @@ class DataService:
 
         try:
             prov = self._get_provider(provider)
+            self._assert_storage_key_holds_one_venue(provider, prov)
             if not all(
                 callable(getattr(prov, name, None))
                 for name in (

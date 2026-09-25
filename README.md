@@ -25,19 +25,32 @@ Part of the Latent Infinity Quant (LIQ) ecosystem, `liq-data` handles data acqui
 from liq.data.service import DataService
 
 ds = DataService()
-# Fetch and store bars
-ds.fetch("oanda", "EUR_USD", start, end, timeframe="1m")
-# Load from store
-df = ds.load("oanda", "EUR_USD", "1m")
-# Backfill missing gaps
-df = ds.backfill("oanda", "EUR_USD", start, end, timeframe="1m")
+# Every read declares what it is for. Ingestion and diagnostics are not
+# research, so they declare dev_smoke and name the component in arm_id.
+ds.fetch(
+    "oanda", "EUR_USD", start, end, timeframe="1m",
+    purpose="dev_smoke", arm_id="my_ingest_component",
+)
+df = ds.load(
+    "oanda", "EUR_USD", "1m", start, end,
+    purpose="dev_smoke", arm_id="my_ingest_component",
+)
+df = ds.backfill(
+    "oanda", "EUR_USD", start, end, timeframe="1m",
+    purpose="dev_smoke", arm_id="my_ingest_component",
+)
 ```
 
 ### Research lockbox guard
 
-Research reads must declare a `purpose` and `arm_id`; `DataService.load` then
-enforces the campaign lockbox ledger (`liq.data.lockbox`) before touching any
-data and appends every permitted read to `<data_root>/lockbox_usage_log.jsonl`:
+The guard is **default-deny**. Every entry point that can return market values
+-- `load`, `iter_batches`, `fetch`, `fetch_corporate_actions`,
+`fetch_adjustment_factors`, `probe_bar_coverage`, `backfill`, and the derived
+`validate` / `info` / `stats` / `gaps` -- requires a `purpose` and `arm_id`. A
+read that declares neither raises `UndeclaredReadError` before any store or
+provider is touched. A declared read is checked against the campaign lockbox
+ledger (`liq.data.lockbox`) and appended to
+`<data_root>/lockbox_usage_log.jsonl`:
 
 ```python
 df = ds.load(
@@ -47,17 +60,78 @@ df = ds.load(
 )
 ```
 
+`UndeclaredReadError` is deliberately **not** a `LockboxViolationError` and does
+not inherit from it: "you did not say what this read is for" and "the fold
+boundaries refuse this read" are different facts, and `except
+LockboxViolationError` must not swallow the first. `UnclassifiedProviderError`
+is the third fact -- "nobody classified this provider" -- and is likewise
+unrelated to either by inheritance.
+
+#### Providers outside the ledger
+
+A read whose provider `resolve_dataset` does not map is one of two things, and
+they are no longer the same thing:
+
+- **Ungoverned** -- the provider is in `liq.data.lockbox.UNGOVERNED_PROVIDERS`,
+  an allow-list carrying a stated reason per entry (`fred`, `polygon`). The read
+  is served *and logged*, with `dataset: null`, `governed: false`, the provider
+  string and a stable `ungoverned:<provider>` identity. A null dataset matches
+  no dataset name, so the entry can never supply citable coverage through
+  `guarded_windows`; `guard.ungoverned_windows(arm_id=..., provider=...)`
+  returns it for honest provenance attribution instead.
+- **Unclassified** -- everything else. A research-purpose read raises
+  `UnclassifiedProviderError` before any store or provider is touched. A
+  `dev_smoke` read is served and logged, so ingestion, fixture builds and
+  diagnostics keep working, and a genuinely misspelled provider still gets
+  `_get_provider`'s more specific "Unknown provider" message.
+
+Adding an allow-list entry is a governance act, not a code cleanup.
+
+#### One venue, one storage key
+
+The storage key is built from the caller's provider argument; the venue is chosen
+by settings. Nothing joined the two, so a `BINANCE_USE_US=true` fetch under the
+`binance` key wrote Binance.US bars into a key named for Binance.com and nothing
+downstream could tell -- stored bars carry no venue provenance.
+
+`liq.data.lockbox.STORAGE_KEY_VENUES` records, per key, which
+`MarketDataProvider.name` it is declared to hold; every key without an entry
+defaults to its own name. Every path that writes provider bars under a
+caller-chosen key -- `fetch`, `backfill`, `sync`, `sync_batch` -- compares the
+constructed provider against that declaration before contacting the provider and
+raises `StorageVenueMismatchError` on disagreement. The one recorded entry is `binance`,
+declared to hold `binance_us` bars because that is what the tree was measured to
+contain -- so a truthful Binance.US ingest passes and a Binance.com ingest under
+the same key is refused as market mixing.
+
+`binance` and `binance_us` resolve to the same governed dataset (`binance_spot`);
+they are one venue, so there is one key. **Do not copy or alias bars between
+provider keys** -- that makes the same minutes reachable under two fold
+governances. Evidence and reasoning:
+`liq-docs/plans/oracle-binance-us-market-identity-2026-09-24.md`.
+
 Reads inside a program-lockbox period raise `LockboxViolationError` unless the
 human-only `final_portfolio_review=True` flag is passed; an arm gets exactly
 one validation-period use per dataset (`ValidationReuseError` on reuse);
 `purpose="dev_smoke"` is allowed anywhere but tagged in the log and is never
-research evidence. Reads without a declared purpose are not checked or logged
-and can never be cited as research evidence.
+research evidence.
+
+Research reads must be bounded -- an unbounded read cannot be checked against a
+fold window at all. An unbounded read is admissible only for `dev_smoke`, and
+its ledger entry records `start: null`, `end: null` and `unbounded: true`
+rather than a window the read did not have. `validate`, `info`, `stats` and
+`gaps` read the whole stored series and are therefore `dev_smoke`-only.
 
 For final provenance reconciliation, query citable windows with both identity
 dimensions: `guard.guarded_windows(arm_id=arm_id, dataset=dataset)`. The result
 contains only research-purpose reads for that exact dataset; `dev_smoke` reads
 are deliberately excluded.
+
+`unreachable_datasets(ledger)` reports the opposite disagreement: datasets a
+ledger declares that no `resolve_dataset` call can return, so the governance
+written for them governs nothing. It is non-empty today (`binance_perp` in the
+campaign ledger, `fred_macro` in the FCE ledger) and the reachability test is
+marked `xfail` with the owed routing decision as its reason.
 
 ### Point-in-time composite universes
 
@@ -169,7 +243,7 @@ liq-data validate-credentials oanda
 python - <<'PY'
 from liq.data.service import DataService
 ds = DataService()
-df_1h = ds.load("oanda", "EUR_USD", "1h")
+df_1h = ds.load("oanda", "EUR_USD", "1h", purpose="dev_smoke", arm_id="readme_example")
 print(df_1h.head())
 PY
 ```

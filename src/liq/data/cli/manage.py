@@ -17,6 +17,11 @@ from liq.data.settings import get_storage_key, get_store
 
 app = typer.Typer()
 
+#: Gap reporting is a diagnostic, not research: it declares ``dev_smoke``,
+#: which is logged in the lockbox usage ledger and is never research evidence.
+DIAGNOSTIC_PURPOSE = "dev_smoke"
+DIAGNOSTIC_ARM_ID = "liq_data_gap_report_cli"
+
 
 @app.command("compare")
 def compare_data(
@@ -257,7 +262,14 @@ def gaps(
 ) -> None:
     """Show gaps for a symbol/timeframe."""
     ds = DataService()
-    gap_list = ds.gaps(provider, symbol, timeframe, expected_minutes)
+    gap_list = ds.gaps(
+        provider,
+        symbol,
+        timeframe,
+        expected_minutes,
+        purpose=DIAGNOSTIC_PURPOSE,
+        arm_id=DIAGNOSTIC_ARM_ID,
+    )
     if not gap_list:
         console.print("[green]No gaps detected[/green]")
         return

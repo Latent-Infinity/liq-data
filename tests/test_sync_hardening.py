@@ -246,8 +246,12 @@ class TestResumability:
             )
         assert third["api_calls"] == 0
         assert third["manifest_gaps"] == 0
-        aapl_df = service.load("databento", "AAPL", "1m")
-        msft_df = service.load("databento", "MSFT", "1m")
+        aapl_df = service.load(
+            "databento", "AAPL", "1m", purpose="dev_smoke", arm_id="liq_data_sync_tests"
+        )
+        msft_df = service.load(
+            "databento", "MSFT", "1m", purpose="dev_smoke", arm_id="liq_data_sync_tests"
+        )
         assert aapl_df.height == 1
         assert msft_df.height == 1
         assert aapl_df.n_unique(subset=["timestamp"]) == 1

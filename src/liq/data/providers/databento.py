@@ -63,6 +63,7 @@ from tenacity import RetryCallState, Retrying, retry_if_exception_type, stop_aft
 from liq.data.exceptions import DataQualityError, ProviderError, ProviderNoDataError
 from liq.data.protocols import BatchJob
 from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE, BaseProvider
+from liq.data.security_master import SecurityMasterRecord, validate_security_master_request
 from liq.data.sync_events import (
     EVENT_BATCH_DOWNLOAD_STARTED,
     EVENT_BATCH_POLLING,
@@ -967,6 +968,40 @@ class DatabentoProvider(BaseProvider):
             if event is not None:
                 record.setdefault("corporate_action_type", str(event))
         return records
+
+    def get_security_master(
+        self,
+        symbols: tuple[str, ...],
+        start: date,
+        end: date,
+        *,
+        max_records: int,
+    ) -> list[SecurityMasterRecord]:
+        validate_security_master_request(symbols, start, end, max_records)
+        client = self._get_reference_client()
+        frame = self._call_with_retry(
+            lambda: client.security_master.get_range(
+                start=start,
+                end=end + timedelta(days=1),
+                index="ts_effective",
+                symbols=list(symbols),
+                stype_in="raw_symbol",
+                countries=["US"],
+            ),
+            sync_run_id=str(uuid4()),
+            dataset="REFERENCE.SECURITY_MASTER",
+            symbol=",".join(symbols),
+            request_kind="reference_get_range",
+        )
+        if not hasattr(frame, "empty") or not hasattr(frame, "reset_index"):
+            raise DatabentoSchemaError("Databento Reference returned non-dataframe response")
+        if len(frame) > max_records:
+            raise DatabentoSchemaError("security-master response exceeds record limit")
+        records = _reference_frame_to_records(frame, index_name="ts_effective")
+        validated = [SecurityMasterRecord.model_validate(record) for record in records]
+        if any(not start <= record.ts_effective.date() <= end for record in validated):
+            raise DatabentoSchemaError("security-master effective date outside requested interval")
+        return validated
 
     def get_adjustment_factors(
         self,

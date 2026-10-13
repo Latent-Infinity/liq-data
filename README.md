@@ -41,7 +41,62 @@ df = ds.backfill(
 )
 ```
 
+### Historical bid/ask candles
+
+`DataService.fetch_bid_ask_bars("oanda", symbol, start, end, timeframe="1m",
+purpose=purpose, arm_id=arm_id)` requests OANDA historical `price=BA` candles
+through the research-period guard. Both UTC date bounds are inclusive. The
+result contains `timestamp`, `bid_open/high/low/close`, `ask_open/high/low/close`,
+and `volume`, with decimal prices. Incomplete candles are omitted; malformed
+complete candles are refused, not repaired. Missing timestamps remain missing.
+
+This retrieval-only path does not persist to the midpoint bar store. Existing
+`fetch_bars` behavior remains midpoint-based. Bid/ask sides already contain the
+quoted spread: do not add it again when computing returns from those sides.
+Historical candles use OANDA's base-price group and do not establish
+account-specific executable prices, slippage, or financing. Research source
+admission remains separate from API access and period-guard checks.
+
 ### Research lockbox guard
+
+`DataService.preflight_stored_timestamps` inspects the timestamp footer declarations
+of an exact SHA-256-pinned file inventory after the research guard admits the
+requested date scope. Supply positive file, byte and row-group budgets. It refuses
+missing or inconsistent statistics, unknown encodings, unexpected inventory paths
+and row-group extrema outside the requested dates. Separate footer usage records
+are written to `timestamp_metadata_usage.jsonl`. Metadata bounds are writer
+declarations; successful preflight does not authorize page reads or prove that
+the writer's statistics match the observations.
+For immutable stores, `DataService(research_log_root=...)` places both research
+guard and footer usage logs in a separate audit directory. The default remains
+the data root; the source paths and guard rules are unchanged.
+
+`DataService.audit_stored_timestamps` summarizes an admitted stored snapshot using
+only the `timestamp` column. Supply explicit dates, purpose/arm and positive
+`batch_size`/`max_rows` budgets. It uses guarded batches, never contacts a provider
+or aggregates missing bars, and returns raw duplicate counts, UTC-date counts and
+anomaly codes. UTC dates do not prove exchange-session identity or original row
+ordering. A budget refusal yields no partial summary. Missing stored bars that
+would need aggregation raise `StoredBarsRequiredError`, a `ValueError` subtype.
+When the reader yields no batches, its schema is unverified and the audit raises
+`SchemaValidationError`; this also refuses valid empty or fully filtered sources
+whose schema the iterator does not expose. It never certifies a zero-row source
+by inventing an empty UTC schema.
+
+This API requires an independently admitted, physically bounded snapshot. The
+storage reader enumerates every partition under a key before date filtering;
+dates alone therefore do not establish physical source isolation. Historical
+source use still needs its own pinned inputs and research authorization.
+
+`audit_pinned_timestamps` audits the complete physical timestamp domain of an
+exact key inventory against pinned footer declarations. It guards access before
+reading bytes and projects timestamps from the same verified buffer used for
+footer inspection. It refuses undeclared dates, duplicate timestamps, duplicate
+UTC dates in daily keys, budget overruns, and declaration mismatches. It preserves
+source order and reports separate descent counts within groups, between groups,
+and between files. Completion requires exhausting every projection and writing
+the usage record; a partial read never returns a completed audit. This API does
+not itself authorize historical source access.
 
 The guard is **default-deny**. Every entry point that can return market values
 -- `load`, `iter_batches`, `fetch`, `fetch_corporate_actions`,
@@ -66,6 +121,13 @@ boundaries refuse this read" are different facts, and `except
 LockboxViolationError` must not swallow the first. `UnclassifiedProviderError`
 is the third fact -- "nobody classified this provider" -- and is likewise
 unrelated to either by inheritance.
+
+`AlpacaEventBasisDailyRequest` uses a separate
+`CLASSICAL_RANKER_EVENT_BASIS_FIXTURE_LEDGER_V1` for the fixed sixteen raw/all
+event slots. It preserves the raw-only announcement request and logs the two
+adjustment modes as distinct datasets. This current-vintage arithmetic source
+does not establish total return, action consistency or historical availability;
+capture and numerical use require their separately frozen scopes.
 
 #### Providers outside the ledger
 

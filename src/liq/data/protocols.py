@@ -6,9 +6,70 @@ must implement to be usable with the LIQ data pipeline.
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import polars as pl
+
+if TYPE_CHECKING:
+    from liq.data.oanda_instrument_metadata import InstrumentMetadataObservation
+    from liq.data.oanda_source_capture_contract import SourcePriceWindow
+    from liq.data.oanda_source_metadata import CandleDay, CandleDayObservation
+    from liq.data.providers.oanda_account_probe import AccountCandleObservation
+    from liq.data.providers.oanda_price_capture import PriceCaptureFailure
+    from liq.data.providers.oanda_source_body import SourceBody
+
+
+@runtime_checkable
+class SourcePriceCaptureProvider(Protocol):
+    """Optional source-quarantine transport, not research access authority."""
+
+    def capture_source_prices(
+        self, scope: "SourcePriceWindow"
+    ) -> "SourceBody | PriceCaptureFailure":
+        """Return structurally quarantined bytes or a safe capture refusal."""
+        ...
+
+
+@runtime_checkable
+class AccountSourceDayProvider(Protocol):
+    """Optional metadata-only account-candle day capability."""
+
+    def probe_source_day(self, scope: "CandleDay") -> "CandleDayObservation":
+        """Return the fixed case's raw-versus-accepted timestamp coverage only."""
+        ...
+
+
+@runtime_checkable
+class InstrumentMetadataProvider(Protocol):
+    """Optional filtered current-instrument source-verification capability."""
+
+    def probe_instrument_metadata(self) -> "InstrumentMetadataObservation":
+        """Return selected membership and units, never account financial state."""
+        ...
+
+
+@runtime_checkable
+class AccountCandleProbeProvider(Protocol):
+    """Optional, metadata-only account-candle compatibility capability."""
+
+    def probe_account_candle(self) -> "AccountCandleObservation":
+        """Return a bounded account-candle observation without market values."""
+        ...
+
+
+@runtime_checkable
+class BidAskBarProvider(Protocol):
+    """Optional capability for historical candles with separate bid and ask OHLC."""
+
+    def fetch_bid_ask_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        timeframe: str = "1m",
+    ) -> pl.DataFrame:
+        """Return timestamp, bid/ask OHLC and provider volume without modeled spreads."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

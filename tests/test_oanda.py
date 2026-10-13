@@ -1,12 +1,16 @@
 """Tests for liq.data.providers.oanda module."""
 
+from collections.abc import Iterator
 from datetime import date
+from pathlib import Path
 
 import httpx
 import polars as pl
 import pytest
 import respx
 
+from liq.data import service as service_module
+from liq.data import settings as settings_module
 from liq.data.exceptions import (
     AuthenticationError,
     ProviderError,
@@ -14,6 +18,29 @@ from liq.data.exceptions import (
     ValidationError,
 )
 from liq.data.providers.oanda import OandaProvider
+from liq.data.service import DataService
+from liq.data.settings import LiqDataSettings
+
+
+@pytest.fixture
+def oanda_data_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[DataService]:
+    def unexpected_settings_resolution() -> LiqDataSettings:
+        raise AssertionError("provider settings must be supplied without resolution")
+
+    settings = LiqDataSettings.model_construct(
+        data_root=tmp_path,
+        oanda_api_key="test-only-token",
+        oanda_account_id="test_account_id",
+        oanda_environment="practice",
+    )
+    with monkeypatch.context() as no_settings_resolution:
+        no_settings_resolution.setattr(
+            service_module, "get_settings", unexpected_settings_resolution
+        )
+        no_settings_resolution.setattr(
+            settings_module, "get_settings", unexpected_settings_resolution
+        )
+        yield DataService(settings=settings, data_root=tmp_path)
 
 
 @pytest.fixture
@@ -209,6 +236,62 @@ class TestOandaProviderListInstruments:
         assert len(result) == 3
         assert "symbol" in result.columns
         assert "EUR_USD" in result["symbol"].to_list()
+
+    @pytest.mark.parametrize(
+        ("instruments", "expected"),
+        [
+            pytest.param(
+                [{"name": "EUR_USD", "displayName": "EUR/USD", "type": "CURRENCY"}],
+                [
+                    {
+                        "symbol": "EUR_USD",
+                        "name": "EUR/USD",
+                        "asset_class": "forex",
+                        "type": "CURRENCY",
+                    }
+                ],
+                id="mapped-metadata",
+            ),
+            pytest.param([], [], id="empty-metadata"),
+        ],
+    )
+    @respx.mock
+    def test_data_service_fetch_instruments_uses_oanda_adapter(
+        self,
+        oanda_data_service: DataService,
+        instruments: list[dict[str, str]],
+        expected: list[dict[str, str]],
+    ) -> None:
+        route = respx.get(
+            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={"instruments": instruments},
+            )
+        )
+        result = oanda_data_service.fetch_instruments("oanda", "forex")
+        assert result == expected
+        assert route.called
+
+    @respx.mock
+    def test_data_service_fetch_instruments_rejects_unsupported_asset_class(
+        self, oanda_data_service: DataService
+    ) -> None:
+        with pytest.raises(ProviderError, match="OANDA only supports forex"):
+            oanda_data_service.fetch_instruments("oanda", "crypto")
+        assert not respx.calls
+
+    @respx.mock
+    def test_data_service_fetch_instruments_preserves_provider_error(
+        self, oanda_data_service: DataService
+    ) -> None:
+        route = respx.get(
+            "https://api-fxpractice.oanda.com/v3/accounts/test_account_id/instruments"
+        ).mock(return_value=httpx.Response(500))
+        with pytest.raises(ProviderError, match="OANDA API error: 500"):
+            oanda_data_service.fetch_instruments("oanda", "forex")
+        assert route.called
 
     @respx.mock
     def test_list_instruments_with_asset_class_filter(

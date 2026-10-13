@@ -198,6 +198,118 @@ INTRADAY_CAMPAIGN_LEDGER_V1 = LockboxLedger(
     ),
 )
 
+CLASSICAL_RANKER_REFERENCE_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_reference_v1.0",
+    datasets=MappingProxyType(
+        {
+            "databento_security_master": FoldWindows(
+                characterization=(date(2008, 1, 1), date(2018, 12, 31)),
+                allowed_purposes=frozenset({"characterization"}),
+            ),
+        }
+    ),
+)
+
+CLASSICAL_RANKER_ALPACA_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_alpaca_v1.0",
+    datasets=MappingProxyType(
+        {
+            "alpaca_ranker_corporate_actions": FoldWindows(
+                characterization=(date(2008, 1, 1), date(2018, 12, 31)),
+                allowed_purposes=frozenset({"characterization"}),
+            ),
+            "alpaca_ranker_bars": FoldWindows(
+                characterization=(date(2023, 4, 21), date(2023, 4, 24)),
+                allowed_purposes=frozenset({"characterization"}),
+            ),
+        }
+    ),
+)
+
+CLASSICAL_RANKER_CALENDAR_REFERENCE_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_calendar_reference_v1.0",
+    datasets=MappingProxyType(
+        {
+            "alpaca_ranker_calendar_reference": FoldWindows(
+                characterization=(date(2023, 1, 26), date(2023, 4, 24)),
+                allowed_purposes=frozenset({"characterization"}),
+            ),
+        }
+    ),
+)
+
+CLASSICAL_RANKER_DAILY_FIXTURE_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_daily_fixture_v1.0",
+    datasets=MappingProxyType(
+        {
+            "alpaca_ranker_daily_fixture": FoldWindows(
+                characterization=(date(2023, 1, 26), date(2023, 4, 24)),
+                allowed_purposes=frozenset({"characterization"}),
+            ),
+        }
+    ),
+)
+
+
+CLASSICAL_RANKER_EVENT_BASIS_FIXTURE_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_event_basis_fixture_v1.0",
+    datasets=MappingProxyType(
+        {
+            f"alpaca_ranker_event_basis_{adjustment}_fixture": FoldWindows(
+                characterization=(date(2022, 4, 26), date(2023, 2, 15)),
+                allowed_purposes=frozenset({"characterization"}),
+            )
+            for adjustment in ("raw", "all")
+        }
+    ),
+)
+
+
+CLASSICAL_RANKER_ANNOUNCEMENT_FIXTURE_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_announcement_fixture_v1.0",
+    datasets=MappingProxyType(
+        {
+            name: FoldWindows(
+                characterization=(date(2022, 4, 25), date(2023, 2, 15)),
+                allowed_purposes=frozenset({"characterization"}),
+            )
+            for name in (
+                "alpaca_ranker_announcement_calendar_reference",
+                "alpaca_ranker_announcement_daily_fixture",
+            )
+        }
+    ),
+)
+
+
+CLASSICAL_RANKER_MOMENTUM_FIXTURE_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_momentum_fixture_v1.0",
+    datasets=MappingProxyType(
+        {
+            name: FoldWindows(
+                characterization=(date(2022, 4, 1), date(2023, 3, 31)),
+                allowed_purposes=frozenset({"characterization"}),
+            )
+            for name in (
+                "alpaca_ranker_momentum_calendar_reference",
+                "alpaca_ranker_momentum_daily_fixture",
+            )
+        }
+    ),
+)
+
+CLASSICAL_RANKER_MOMENTUM_NUMERICAL_LEDGER_V1 = LockboxLedger(
+    version="classical_ranker_momentum_numerical_fixture_v1.0",
+    datasets=MappingProxyType(
+        {
+            "alpaca_ranker_momentum_numerical_fixture": FoldWindows(
+                characterization=(date(2022, 4, 1), date(2023, 3, 31)),
+                allowed_purposes=frozenset({"dev_smoke"}),
+            ),
+        }
+    ),
+)
+
 _FCE_WINDOWS = FoldWindows(
     discovery=(date(2020, 1, 1), date(2024, 12, 31)),
     validation=(date(2025, 1, 1), date(2025, 12, 31)),
@@ -226,7 +338,9 @@ _CRYPTO_FUTURES_CONTINUOUS_SYMBOLS = frozenset({"@MBT", "@MET"})
 USAGE_LOG_FILENAME = "lockbox_usage_log.jsonl"
 
 
-def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = None) -> str | None:
+def resolve_dataset(
+    provider: str, symbol: str, *, asset_class: str | None = None, data_kind: str = "bars"
+) -> str | None:
     """Map a provider/symbol pair to its ledger dataset name.
 
     ``asset_class`` discriminates reads that share a provider but must be
@@ -254,6 +368,25 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
     are not fold-governed).
     """
     provider = provider.lower()
+    if data_kind in {
+        "ranker_announcement_calendar_reference",
+        "ranker_announcement_daily_fixture",
+        "ranker_event_basis_raw_fixture",
+        "ranker_event_basis_all_fixture",
+        "ranker_momentum_calendar_reference",
+        "ranker_momentum_daily_fixture",
+    }:
+        return f"alpaca_{data_kind}" if provider == "alpaca" else None
+    if data_kind == "ranker_calendar_reference":
+        if provider != "alpaca":
+            return None
+        return "alpaca_ranker_calendar_reference"
+    if data_kind in {"ranker_bars", "ranker_corporate_actions", "ranker_daily_fixture"}:
+        if provider != "alpaca":
+            return None
+        return f"alpaca_{data_kind}"
+    if data_kind == "security_master":
+        return "databento_security_master" if provider == "databento" else None
     if provider == "tradestation":
         if asset_class == "future" or symbol.upper() in _CRYPTO_FUTURES_CONTINUOUS_SYMBOLS:
             return "tradestation_crypto_futures"
@@ -291,6 +424,7 @@ def resolve_dataset(provider: str, symbol: str, *, asset_class: str | None = Non
 #: constant cannot drift away from the function it describes.
 RESOLVABLE_DATASETS = frozenset(
     {
+        "alpaca_ranker_calendar_reference",
         "spy_qqq_ladder_tradestation",
         "month_end_spy_agg",
         "index_recon_sp500",
@@ -501,6 +635,7 @@ class LockboxGuard:
         symbol: str,
         *,
         asset_class: str | None = None,
+        data_kind: str = "bars",
     ) -> str | None:
         """Resolve a read to a dataset of *this* ledger, or ``None``.
 
@@ -515,7 +650,7 @@ class LockboxGuard:
         itself permission to serve it; the caller classifies the provider as
         ungoverned or unclassified and acts accordingly.
         """
-        dataset = resolve_dataset(provider, symbol, asset_class=asset_class)
+        dataset = resolve_dataset(provider, symbol, asset_class=asset_class, data_kind=data_kind)
         if dataset is not None and dataset not in self.ledger.datasets:
             raise LockboxViolationError(
                 f"resolver mapped {provider}/{symbol} to dataset '{dataset}', which "

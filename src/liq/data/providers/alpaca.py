@@ -13,18 +13,57 @@ Features:
 - Automatic pagination for large datasets
 """
 
+import asyncio
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
 import httpx
 import polars as pl
 
+from liq.data.alpaca_action_schema import AlpacaActionSchemaRequest, validate_action_schema_request
+from liq.data.alpaca_announcement_source import (
+    AlpacaAnnouncementCalendarRequest,
+    AlpacaAnnouncementDailyRequest,
+    validate_announcement_request,
+)
+from liq.data.alpaca_event_basis_source import (
+    AlpacaEventBasisDailyRequest,
+    validate_event_basis_request,
+)
+from liq.data.alpaca_momentum_source import (
+    AlpacaMomentumCalendarRequest,
+    AlpacaMomentumDailyRequest,
+)
+from liq.data.alpaca_source import (
+    SOURCE_PAGE_TIMEOUT_SECONDS,
+    AlpacaBarsRequest,
+    AlpacaCalendarRequest,
+    AlpacaCaptureRefused,
+    AlpacaCorporateActionsRequest,
+    AlpacaDailyFixtureRequest,
+)
 from liq.data.exceptions import (
     AuthenticationError,
     ProviderError,
     RateLimitError,
 )
 from liq.data.providers.base import BaseProvider
+
+
+class _AttemptTransport(httpx.AsyncBaseTransport):
+    """Witness an initiated transport call, including connection refusals."""
+
+    def __init__(self, delegate: httpx.AsyncBaseTransport, witness: Callable[[], None]) -> None:
+        self.delegate = delegate
+        self.witness = witness
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.witness()
+        return await self.delegate.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self.delegate.aclose()
 
 
 class AlpacaProvider(BaseProvider):
@@ -91,6 +130,7 @@ class AlpacaProvider(BaseProvider):
 
         # HTTP client created lazily
         self._client: httpx.Client | None = None
+        self._source_transport: httpx.AsyncBaseTransport | None = None
 
     def _get_client(self) -> httpx.Client:
         """Get or create the HTTP client."""
@@ -304,6 +344,142 @@ class AlpacaProvider(BaseProvider):
                 break
 
         return actions
+
+    def fetch_source_page(
+        self,
+        request: AlpacaBarsRequest
+        | AlpacaCorporateActionsRequest
+        | AlpacaActionSchemaRequest
+        | AlpacaDailyFixtureRequest
+        | AlpacaCalendarRequest
+        | AlpacaMomentumCalendarRequest
+        | AlpacaMomentumDailyRequest
+        | AlpacaAnnouncementCalendarRequest
+        | AlpacaAnnouncementDailyRequest
+        | AlpacaEventBasisDailyRequest,
+        *,
+        page_token: str | None,
+        on_http_attempt: Callable[[], None] | None = None,
+    ) -> bytes:
+        if isinstance(request, AlpacaActionSchemaRequest):
+            request = validate_action_schema_request(request)
+            if page_token is not None:
+                raise AlpacaCaptureRefused("action_schema_continuation_forbidden")
+        if isinstance(request, AlpacaEventBasisDailyRequest):
+            request = validate_event_basis_request(request)
+        if isinstance(request, (AlpacaAnnouncementCalendarRequest, AlpacaAnnouncementDailyRequest)):
+            request = validate_announcement_request(request)
+        if isinstance(request, AlpacaMomentumCalendarRequest):
+            request = AlpacaMomentumCalendarRequest.model_validate(request)
+        elif isinstance(request, AlpacaMomentumDailyRequest):
+            request = AlpacaMomentumDailyRequest.model_validate(request)
+        if isinstance(
+            request,
+            (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest),
+        ):
+            url = "https://paper-api.alpaca.markets/v2/calendar"
+            params = {
+                "start": request.start.isoformat(),
+                "end": request.end.isoformat(),
+                "date_type": "TRADING",
+            }
+            max_bytes = request.max_response_bytes
+        elif isinstance(request, (AlpacaCorporateActionsRequest, AlpacaActionSchemaRequest)):
+            url = f"{self.DATA_BASE_URL}/v1/corporate-actions"
+            params: dict[str, Any] = {
+                "symbols": ",".join(request.symbols),
+                "start": request.start.isoformat(),
+                "end": request.end.isoformat(),
+                "data_quality": request.data_quality,
+                "limit": request.limit,
+                "sort": "asc",
+                "region": "us",
+            }
+            max_bytes = request.max_response_bytes
+        elif isinstance(
+            request,
+            (AlpacaBarsRequest, AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest),
+        ):
+            url = f"{self.DATA_BASE_URL}/v2/stocks/bars"
+            params = {
+                "symbols": request.symbol,
+                "start": request.start.isoformat().replace("+00:00", "Z"),
+                "end": request.end.isoformat().replace("+00:00", "Z"),
+                "timeframe": request.timeframe,
+                "adjustment": request.adjustment,
+                "asof": request.asof.isoformat(),
+                "feed": request.feed,
+                "currency": request.currency,
+                "limit": request.limit,
+                "sort": "asc",
+            }
+            max_bytes = request.max_response_bytes
+        else:
+            raise TypeError("unsupported Alpaca source request")
+        if page_token is not None:
+            if isinstance(request, (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest)):
+                raise AlpacaCaptureRefused("calendar_continuation_forbidden")
+            if isinstance(request, (AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest)):
+                raise AlpacaCaptureRefused("daily_fixture_continuation_forbidden")
+            if not isinstance(page_token, str) or not page_token or len(page_token) > 4096:
+                raise AlpacaCaptureRefused("invalid_page_token")
+            params["page_token"] = page_token
+
+        headers = {
+            "APCA-API-KEY-ID": self._api_key,
+            "APCA-API-SECRET-KEY": self._api_secret,
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+        }
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise AlpacaCaptureRefused("source_page_requires_sync_context")
+
+        async def read_page() -> bytes:
+            transport = self._source_transport
+            if on_http_attempt is not None:
+                transport = _AttemptTransport(
+                    transport or httpx.AsyncHTTPTransport(retries=0), on_http_attempt
+                )
+            async with (
+                httpx.AsyncClient(
+                    timeout=httpx.Timeout(SOURCE_PAGE_TIMEOUT_SECONDS),
+                    follow_redirects=False,
+                    transport=transport,
+                ) as client,
+                client.stream(
+                    "GET",
+                    url,
+                    params=params,
+                    headers=headers,
+                    follow_redirects=False,
+                ) as response,
+            ):
+                if response.status_code != 200:
+                    raise AlpacaCaptureRefused("http_refused", response.status_code)
+                if response.headers.get("content-encoding", "identity").lower() != "identity":
+                    raise AlpacaCaptureRefused("unexpected_content_encoding", response.status_code)
+                content_type = response.headers.get("content-type", "").split(";", 1)[0]
+                if content_type != "application/json":
+                    raise AlpacaCaptureRefused("unexpected_content_type", response.status_code)
+                body = bytearray()
+                async for chunk in response.aiter_raw(chunk_size=65536):
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise AlpacaCaptureRefused("response_byte_limit", response.status_code)
+                return bytes(body)
+
+        try:
+            return asyncio.run(asyncio.wait_for(read_page(), timeout=SOURCE_PAGE_TIMEOUT_SECONDS))
+        except TimeoutError as exc:
+            raise AlpacaCaptureRefused("request_deadline") from exc
+        except AlpacaCaptureRefused:
+            raise
+        except httpx.HTTPError as exc:
+            raise AlpacaCaptureRefused("transport_error") from exc
 
     def list_instruments(self, asset_class: str | None = None) -> pl.DataFrame:  # noqa: ARG002
         """List available assets from Alpaca.

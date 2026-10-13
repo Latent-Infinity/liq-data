@@ -52,10 +52,12 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import json
 import logging
 import threading
 import time
 import uuid
+from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -66,16 +68,46 @@ import polars as pl
 from filelock import FileLock, Timeout
 
 from liq.data.aggregation import aggregate_bars
+from liq.data.alpaca_announcement_source import (
+    AlpacaAnnouncementCalendarRequest,
+    AlpacaAnnouncementDailyRequest,
+    validate_announcement_request,
+)
+from liq.data.alpaca_event_basis_source import (
+    AlpacaEventBasisDailyRequest,
+    validate_event_basis_request,
+)
+from liq.data.alpaca_momentum_source import (
+    AlpacaMomentumCalendarRequest,
+    AlpacaMomentumDailyRequest,
+)
+from liq.data.alpaca_source import (
+    AlpacaBarsRequest,
+    AlpacaCalendarRequest,
+    AlpacaCorporateActionsRequest,
+    AlpacaDailyFixtureRequest,
+)
 from liq.data.exceptions import (
     LockboxViolationError,
+    ProviderError,
     ProviderNoDataError,
     SchemaValidationError,
     StorageVenueMismatchError,
+    StoredBarsRequiredError,
+    TimestampAuditLimitError,
     UnclassifiedProviderError,
     UndeclaredReadError,
+    ValidationError,
 )
+from liq.data.fx_fix_cohort_window import CohortSourceWindow
 from liq.data.gaps import detect_gaps
 from liq.data.lockbox import (
+    CLASSICAL_RANKER_ALPACA_LEDGER_V1,
+    CLASSICAL_RANKER_ANNOUNCEMENT_FIXTURE_LEDGER_V1,
+    CLASSICAL_RANKER_CALENDAR_REFERENCE_LEDGER_V1,
+    CLASSICAL_RANKER_DAILY_FIXTURE_LEDGER_V1,
+    CLASSICAL_RANKER_EVENT_BASIS_FIXTURE_LEDGER_V1,
+    CLASSICAL_RANKER_MOMENTUM_FIXTURE_LEDGER_V1,
     RESEARCH_PURPOSES,
     UNGOVERNED_PROVIDERS,
     USAGE_LOG_FILENAME,
@@ -83,11 +115,35 @@ from liq.data.lockbox import (
     LockboxLedger,
     declared_storage_venue,
 )
+from liq.data.oanda_instrument_metadata import (
+    InstrumentMetadataObservation,
+    InstrumentMetadataRequest,
+)
+from liq.data.oanda_source_capture_contract import SourcePriceWindow
+from liq.data.oanda_source_metadata import CandleDay, CandleDayObservation
 from liq.data.policies import POLICIES
-from liq.data.protocols import BatchJob, BatchMarketDataProvider, CorporateActionsProvider
+from liq.data.protocols import (
+    AccountCandleProbeProvider,
+    AccountSourceDayProvider,
+    BatchJob,
+    BatchMarketDataProvider,
+    BidAskBarProvider,
+    CorporateActionsProvider,
+    SourcePriceCaptureProvider,
+)
+from liq.data.providers.alpaca import AlpacaProvider
 from liq.data.providers.databento import SCHEMA_BY_TIMEFRAME
+from liq.data.providers.oanda_account_probe import PROBE_ARM, PROBE_START, AccountCandleObservation
+from liq.data.providers.oanda_price_capture import PriceCaptureFailure, PriceCapturePolicyRefused
+from liq.data.providers.oanda_source_body import SourceBody
+from liq.data.providers.oanda_source_transport import validate_source_day
 from liq.data.qa import validate_ohlc
 from liq.data.rate_limiter import RateLimiter
+from liq.data.security_master import (
+    SecurityMasterProvider,
+    SecurityMasterRecord,
+    validate_security_master_request,
+)
 from liq.data.settings import (
     LiqDataSettings,
     create_alpaca_provider,
@@ -114,8 +170,20 @@ from liq.data.sync_events import (
     EVENT_UNIVERSE_RESOLVED,
     SyncLockedError,
 )
+from liq.data.timestamp_domain import (
+    TimestampDomainAccumulator,
+    TimestampDomainAudit,
+    TimestampDomainRefused,
+)
 from liq.store import key_builder
 from liq.store.parquet import ParquetStore
+from liq.store.timestamp_metadata import (
+    PinnedParquetFile,
+    TimestampFileMetadata,
+    TimestampMetadataRefused,
+    inspect_timestamp_metadata,
+)
+from liq.store.timestamp_projection import TimestampProjectionLimits, iter_pinned_timestamps
 
 if TYPE_CHECKING:
     from liq.data.protocols import MarketDataProvider
@@ -184,6 +252,25 @@ class BarCoverageObservation:
             "last_timestamp": self.last_timestamp,
             "timestamp_sha256": self.timestamp_sha256,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class StoredTimestampAudit:
+    """Stored timestamp counts; UTC dates do not establish exchange sessions."""
+
+    coverage: BarCoverageObservation
+    utc_date_counts: tuple[tuple[str, int], ...]
+
+    @property
+    def anomalies(self) -> tuple[str, ...]:
+        findings = []
+        if self.coverage.duplicate_timestamp_count:
+            findings.append("duplicate_timestamps")
+        if self.coverage.outside_requested_window_count:
+            findings.append("out_of_scope_timestamps")
+        if self.coverage.timeframe == "1d" and any(count > 1 for _, count in self.utc_date_counts):
+            findings.append("multiple_daily_rows_per_utc_date")
+        return tuple(findings)
 
 
 def _summarize_bar_coverage(
@@ -267,6 +354,7 @@ class DataService:
         settings: LiqDataSettings | None = None,
         data_root: Path | None = None,
         lockbox_ledger: LockboxLedger | None = None,
+        research_log_root: Path | None = None,
     ) -> None:
         """Initialize DataService.
 
@@ -274,9 +362,11 @@ class DataService:
             settings: Optional settings instance (uses get_settings() if not provided)
             data_root: Optional override for data storage directory
             lockbox_ledger: Optional research lockbox ledger for declared-purpose reads
+            research_log_root: Optional audit directory for immutable source stores
         """
         self._settings = settings or get_settings()
         self._data_root = data_root or self._settings.data_root
+        self._research_log_root = research_log_root or self._data_root
         self._store = ParquetStore(str(self._data_root))
         self._lockbox_ledger = lockbox_ledger
         self._lockbox_guard: LockboxGuard | None = None
@@ -300,15 +390,15 @@ class DataService:
 
     @property
     def lockbox_guard(self) -> LockboxGuard:
-        """Lockbox guard for research reads (usage log lives under data_root)."""
+        """Lockbox guard using the configured research audit directory."""
         if self._lockbox_guard is None:
             if self._lockbox_ledger is None:
                 self._lockbox_guard = LockboxGuard(
-                    usage_log_path=self._data_root / USAGE_LOG_FILENAME
+                    usage_log_path=self._research_log_root / USAGE_LOG_FILENAME
                 )
             else:
                 self._lockbox_guard = LockboxGuard(
-                    usage_log_path=self._data_root / USAGE_LOG_FILENAME,
+                    usage_log_path=self._research_log_root / USAGE_LOG_FILENAME,
                     ledger=self._lockbox_ledger,
                 )
         return self._lockbox_guard
@@ -362,7 +452,9 @@ class DataService:
             )
         if not arm_id:
             raise ValueError("arm_id is required when a research purpose is declared")
-        dataset = self.lockbox_guard.classify_read(provider, symbol, asset_class=asset_class)
+        dataset = self.lockbox_guard.classify_read(
+            provider, symbol, asset_class=asset_class, data_kind=data_kind
+        )
         if dataset is None:
             self._guard_ungoverned_read(
                 provider,
@@ -668,7 +760,9 @@ class DataService:
                 base_key = self._storage_key(provider, symbol, "1m")
                 if self._store.exists(base_key):
                     if batch_size is not None:
-                        raise ValueError("batch_size is not supported for aggregated reads")
+                        raise StoredBarsRequiredError(
+                            "batch_size is not supported for aggregated reads"
+                        )
                     base_df = self._store.read(
                         base_key,
                         start=start,
@@ -729,6 +823,298 @@ class DataService:
             yield result
             return
         yield from result
+
+    def _validate_timestamp_inventory(self, key: str, files: tuple[PinnedParquetFile, ...]) -> None:
+        base = self._data_root / key
+        ancestry = (self._data_root, *base.parents)
+        if base.is_symlink() or any(path.is_symlink() for path in ancestry):
+            raise SchemaValidationError("timestamp metadata key is redirected")
+        expected_paths: set[str] = set()
+        for item in files:
+            parts = item.path[len(key) + 1 :].split("/")
+            expected_paths.update("/".join(parts[:index]) for index in range(1, len(parts) + 1))
+        for path in base.rglob("*"):
+            relative = path.relative_to(base).as_posix()
+            if path.is_symlink() or relative not in expected_paths:
+                raise SchemaValidationError(
+                    "timestamp metadata inventory contains an unexpected path"
+                )
+            expected_paths.remove(relative)
+        if expected_paths:
+            raise SchemaValidationError("timestamp metadata inventory contains missing paths")
+
+    def audit_pinned_timestamps(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        start: date,
+        end: date,
+        *,
+        expected: tuple[TimestampFileMetadata, ...],
+        purpose: str | None,
+        arm_id: str,
+        max_files: int,
+        max_rows: int,
+        limits: TimestampProjectionLimits,
+    ) -> TimestampDomainAudit:
+        """Guard and exhaust pinned timestamp projections before publishing a domain audit."""
+        _require_declared_purpose(purpose, "DataService.audit_pinned_timestamps")
+        if start > end:
+            raise ValueError("timestamp domain start must not follow end")
+        key = self._storage_key(provider, symbol, timeframe)
+        files = tuple(item.identity for item in expected)
+        if any(not item.path.startswith(key + "/") for item in files):
+            raise ValueError("timestamp domain files must match declared key")
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=False,
+            timeframe=timeframe,
+            data_kind="timestamp_domain",
+        )
+        inventory_hash = hashlib.sha256(
+            json.dumps([(item.path, item.sha256) for item in files], separators=(",", ":")).encode()
+        ).hexdigest()
+        attempt_id = uuid.uuid4().hex
+        accumulator: TimestampDomainAccumulator | None = None
+
+        def record(event: str, **details: str | int) -> None:
+            entry = {
+                "ts": datetime.now(UTC).isoformat(),
+                "attempt_id": attempt_id,
+                "access_kind": "timestamp_domain",
+                "event": event,
+                "provider": provider,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "purpose": purpose,
+                "arm_id": arm_id,
+                "inventory_sha256": inventory_hash,
+                **details,
+            }
+            with (self._research_log_root / "timestamp_domain_usage.jsonl").open("a") as output:
+                output.write(json.dumps(entry, sort_keys=True) + "\n")
+
+        record("attempt", files=len(files))
+        try:
+            if any(type(value) is not int or value <= 0 for value in (max_files, max_rows)):
+                raise TimestampDomainRefused(None, None, 0, None, 0, "invalid domain budgets")
+            if not 0 < len(files) <= max_files or len({item.path for item in files}) != len(files):
+                raise TimestampDomainRefused(
+                    None, None, 0, None, 0, "file budget or duplicate path"
+                )
+            if sum(item.row_count for item in expected) > max_rows:
+                raise TimestampDomainRefused(
+                    None, None, 0, None, 0, "declared key row budget exceeded"
+                )
+            lower = (start - date(1970, 1, 1)).days * 86400 * 10**9
+            upper = ((end - date(1970, 1, 1)).days + 1) * 86400 * 10**9
+            for item in expected:
+                for group in item.row_groups:
+                    if group.minimum_ns < lower or group.maximum_ns >= upper:
+                        raise TimestampDomainRefused(
+                            item.identity,
+                            group.index,
+                            0,
+                            None,
+                            0,
+                            "declared footer outside requested dates",
+                        )
+            self._validate_timestamp_inventory(key, files)
+            accumulator = TimestampDomainAccumulator(
+                start, end, daily=timeframe == "1d", max_rows=max_rows
+            )
+            for item in expected:
+                projection = iter_pinned_timestamps(self._data_root, item, limits)
+                try:
+                    for batch in projection:
+                        accumulator.observe(batch)
+                finally:
+                    projection.close()
+            result = accumulator.finish()
+            if result.rows != sum(item.row_count for item in expected) or result.files != len(
+                files
+            ):
+                raise TimestampDomainRefused(
+                    None, None, 0, None, result.rows, "physical domain declaration mismatch"
+                )
+            record(
+                "completed",
+                files=result.files,
+                rows=result.rows,
+                timestamp_sha256=result.timestamp_sha256,
+            )
+            return result
+        except (TimestampMetadataRefused, SchemaValidationError, OSError) as exc:
+            record(
+                "refused",
+                error_type=type(exc).__name__,
+                reason=str(exc),
+                partial_rows=accumulator.rows if accumulator else 0,
+            )
+            raise
+
+    def preflight_stored_timestamps(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        start: date,
+        end: date,
+        *,
+        files: tuple[PinnedParquetFile, ...],
+        purpose: str | None,
+        arm_id: str,
+        max_files: int,
+        max_file_bytes: int,
+        max_row_groups: int,
+    ) -> tuple[TimestampFileMetadata, ...]:
+        """Guard pinned footer declarations; success does not authorize page decoding."""
+        _require_declared_purpose(purpose, "DataService.preflight_stored_timestamps")
+        if start > end:
+            raise ValueError("timestamp metadata start must not follow end")
+        key = self._storage_key(provider, symbol, timeframe)
+        if any(not item.path.startswith(key + "/") for item in files):
+            raise ValueError("timestamp metadata files must match the declared key")
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=False,
+            timeframe=timeframe,
+            data_kind="timestamp_metadata",
+        )
+        inventory_hash = hashlib.sha256(
+            json.dumps([(item.path, item.sha256) for item in files], separators=(",", ":")).encode()
+        ).hexdigest()
+        attempt_id = uuid.uuid4().hex
+
+        def record(event: str, **details: str | int) -> None:
+            entry = {
+                "ts": datetime.now(UTC).isoformat(),
+                "attempt_id": attempt_id,
+                "access_kind": "timestamp_footer",
+                "event": event,
+                "provider": provider,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "purpose": purpose,
+                "arm_id": arm_id,
+                "inventory_sha256": inventory_hash,
+                **details,
+            }
+            with (self._research_log_root / "timestamp_metadata_usage.jsonl").open("a") as output:
+                output.write(json.dumps(entry, sort_keys=True) + "\n")
+
+        record("attempt", files=len(files))
+        try:
+            budgets = (max_files, max_file_bytes, max_row_groups)
+            if any(type(value) is not int or value <= 0 for value in budgets):
+                raise TimestampMetadataRefused(
+                    "timestamp metadata budgets must be positive integers"
+                )
+            if len(files) > max_files:
+                raise TimestampMetadataRefused("timestamp metadata file budget exceeded")
+            self._validate_timestamp_inventory(key, files)
+            metadata = inspect_timestamp_metadata(
+                self._data_root,
+                files,
+                max_files=max_files,
+                max_file_bytes=max_file_bytes,
+                max_row_groups=max_row_groups,
+            )
+            epoch = date(1970, 1, 1)
+            lower = (start - epoch).days * 86_400 * 10**9
+            upper = ((end - epoch).days + 1) * 86_400 * 10**9
+            for item in metadata:
+                for group in item.row_groups:
+                    if group.minimum_ns < lower or group.maximum_ns >= upper:
+                        raise SchemaValidationError(
+                            f"timestamp metadata outside requested dates: {item.identity.path} "
+                            f"group={group.index} min_ns={group.minimum_ns} max_ns={group.maximum_ns}"
+                        )
+            record("completed", files=len(metadata), rows=sum(item.row_count for item in metadata))
+            return metadata
+        except (TimestampMetadataRefused, SchemaValidationError, OSError) as exc:
+            record("refused", error_type=type(exc).__name__, reason=str(exc))
+            raise
+
+    def audit_stored_timestamps(
+        self,
+        provider: str,
+        symbol: str,
+        timeframe: str,
+        start: date,
+        end: date,
+        *,
+        purpose: str | None,
+        arm_id: str,
+        batch_size: int,
+        max_rows: int,
+    ) -> StoredTimestampAudit:
+        """Audit timestamp-only stored batches, without provider calls or rollups.
+
+        Inputs must already be an admitted, physically bounded store snapshot.
+        Date filters do not restrict which partition files the store enumerates.
+        The loader sorts batches, so this audit makes no original-order claim.
+        A row-budget refusal is incomplete evidence, never a truncated summary.
+        """
+        if start > end:
+            raise ValueError("timestamp audit start must not follow end")
+        if any(type(value) is not int or value <= 0 for value in (batch_size, max_rows)):
+            raise ValueError("timestamp audit budgets must be positive integers")
+        frames: list[pl.DataFrame] = []
+        rows = 0
+        for frame in self.iter_batches(
+            provider,
+            symbol,
+            timeframe,
+            start,
+            end,
+            columns=["timestamp"],
+            purpose=purpose,
+            arm_id=arm_id,
+            batch_size=min(batch_size, max_rows),
+            final_portfolio_review=False,
+        ):
+            if frame.columns != ["timestamp"]:
+                raise SchemaValidationError("Timestamp audit requires only the timestamp column")
+            dtype = frame.schema["timestamp"]
+            if not isinstance(dtype, pl.Datetime) or dtype.time_zone != "UTC":
+                raise SchemaValidationError("Timestamp audit requires UTC datetime schema")
+            if frame["timestamp"].null_count():
+                raise SchemaValidationError("Timestamp audit contains null timestamps")
+            rows += frame.height
+            if rows > max_rows:
+                raise TimestampAuditLimitError("Timestamp audit row budget exceeded")
+            frames.append(frame)
+        if not frames:
+            raise SchemaValidationError("No timestamp schema observed; empty read is unverified")
+        timestamps = pl.concat(frames)
+        coverage = _summarize_bar_coverage(
+            timestamps,
+            provider=provider,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+        )
+        counts = Counter(value.isoformat() for value in timestamps["timestamp"].dt.date())
+        return StoredTimestampAudit(
+            coverage=coverage, utc_date_counts=tuple(sorted(counts.items()))
+        )
 
     def list_symbols(self, provider: str | None = None) -> list[dict[str, str]]:
         """List available data files.
@@ -888,6 +1274,167 @@ class DataService:
             end=end,
         )
 
+    def _prepare_oanda_capture(self, window: SourcePriceWindow) -> None:
+        """Capture-local owners may bind ingress before the ordinary guard."""
+
+    # The default retains the keyword contract without interpreting capture-local scope.
+    def _get_oanda_capture_provider(
+        self,
+        window: SourcePriceWindow,  # noqa: ARG002
+    ) -> MarketDataProvider:
+        """Resolve the capture route without changing ordinary provider selection."""
+        return self._get_provider("oanda")
+
+    def capture_oanda_source_prices(
+        self, scope: SourcePriceWindow, *, purpose: str | None, arm_id: str
+    ) -> SourceBody | PriceCaptureFailure:
+        """Guard an exact discovery case before structurally quarantined BA transport."""
+        _require_declared_purpose(purpose, "DataService.capture_oanda_source_prices")
+        if purpose != "discovery" or arm_id != PROBE_ARM:
+            raise PriceCapturePolicyRefused("DECLARATION_REFUSED")
+        window = SourcePriceWindow.model_validate(scope.model_dump())
+        self._prepare_oanda_capture(window)
+        if (
+            self.lockbox_guard.classify_read(
+                "oanda", window.symbol, asset_class="forex", data_kind="bars"
+            )
+            != "oanda_fx"
+        ):
+            raise PriceCapturePolicyRefused("CLASSIFICATION_REFUSED")
+        self._guard_research_read(
+            "oanda",
+            window.symbol,
+            window.day,
+            window.day,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=False,
+            asset_class="forex",
+            timeframe="1m",
+            data_kind="bars",
+        )
+        source = self._get_oanda_capture_provider(window)
+        if not isinstance(source, SourcePriceCaptureProvider):
+            raise PriceCapturePolicyRefused("PROVIDER_UNSUPPORTED")
+        return source.capture_source_prices(window)
+
+    def _prepare_oanda_cohort_capture(self, window: CohortSourceWindow) -> None:
+        """Cohort owners may bind original one-use ingress before the actual guard."""
+
+    def _get_oanda_cohort_capture_provider(
+        self,
+        window: CohortSourceWindow,  # noqa: ARG002
+    ) -> MarketDataProvider:
+        """Select the retained cohort capability independently of legacy capture."""
+        return self._get_provider("oanda")
+
+    def capture_oanda_cohort_prices(
+        self, scope: CohortSourceWindow, *, purpose: str | None, arm_id: str
+    ) -> SourceBody | PriceCaptureFailure:
+        """Guard a closed development case before resolving its cohort provider."""
+        from liq.data.oanda_cohort_capture import capture_guarded_cohort_prices
+
+        declaration = _require_declared_purpose(purpose, "DataService.capture_oanda_cohort_prices")
+        return capture_guarded_cohort_prices(self, scope, purpose=declaration, arm_id=arm_id)
+
+    def probe_oanda_source_day(
+        self, scope: CandleDay, *, purpose: str | None, arm_id: str
+    ) -> CandleDayObservation:
+        """Guard the actual day before a fixed account-scoped metadata request."""
+        _require_declared_purpose(purpose, "DataService.probe_oanda_source_day")
+        if purpose != "discovery" or arm_id != PROBE_ARM:
+            raise ValidationError("Unapproved OANDA source-verification declaration")
+        validate_source_day(scope)
+        self._guard_research_read(
+            "oanda",
+            scope.symbol,
+            scope.day,
+            scope.day,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=False,
+            asset_class="forex",
+            timeframe="1m",
+            data_kind="bar_coverage",
+        )
+        source = self._get_provider("oanda")
+        if not isinstance(source, AccountSourceDayProvider):
+            raise ProviderError("Provider does not support account day probes")
+        return source.probe_source_day(scope)
+
+    def probe_oanda_instrument_metadata(
+        self, request: InstrumentMetadataRequest
+    ) -> InstrumentMetadataObservation:
+        """Audit a declared current-instrument query without fabricating a historical read."""
+        from liq.data.oanda_instrument_audit import collect_instrument_metadata
+
+        _require_declared_purpose(request.purpose, "DataService.probe_oanda_instrument_metadata")
+        return collect_instrument_metadata(self, request)
+
+    def probe_oanda_account_candle(
+        self,
+        *,
+        purpose: str | None,
+        arm_id: str,
+    ) -> AccountCandleObservation:
+        """Guard the fixed historical compatibility minute and expose metadata only.
+
+        This is a source capability, not execution permission. The caller must
+        provide the separately reviewed one-use claim and end-to-end deadline.
+        """
+        day = PROBE_START.date()
+        self._guard_research_read(
+            "oanda",
+            "EUR_USD",
+            day,
+            day,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=False,
+            asset_class="forex",
+            timeframe="1m",
+            data_kind="bar_coverage",
+        )
+        source = self._get_provider("oanda")
+        if not isinstance(source, AccountCandleProbeProvider):
+            raise ProviderError("Provider does not support account candle probes")
+        return source.probe_account_candle()
+
+    def fetch_bid_ask_bars(
+        self,
+        provider: str,
+        symbol: str,
+        start: date,
+        end: date,
+        *,
+        timeframe: str = "1m",
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        asset_class: str | None = None,
+    ) -> pl.DataFrame:
+        """Fetch separate bid/ask OHLC through the research guard.
+
+        The result is never written to the midpoint bar store. Historical quoted
+        sides include their quoted spread; they do not establish execution fills.
+        Both date bounds are inclusive. Source admission remains the caller's
+        research responsibility, in addition to the enforced period declaration.
+        """
+        self._guard_research_read(
+            provider,
+            symbol,
+            start,
+            end,
+            purpose=purpose,
+            arm_id=arm_id,
+            final_portfolio_review=False,
+            asset_class=asset_class,
+            timeframe=timeframe,
+        )
+        source = self._get_provider(provider)
+        if not isinstance(source, BidAskBarProvider):
+            raise ProviderError(f"Provider {provider} does not support bid/ask candles")
+        return source.fetch_bid_ask_bars(symbol, start, end, timeframe=timeframe)
+
     def fetch_quotes(
         self,
         provider: str,
@@ -963,6 +1510,164 @@ class DataService:
             key = f"{provider}/{key_builder.corp_actions(symbol)}"
             self._store.write(key, pl.DataFrame(actions), mode="overwrite")
         return actions
+
+    def fetch_security_master(
+        self,
+        provider: str,
+        symbols: tuple[str, ...],
+        start: date,
+        end: date,
+        *,
+        max_records: int,
+        purpose: str | None = None,
+        arm_id: str | None = None,
+        final_portfolio_review: bool = False,
+    ) -> list[SecurityMasterRecord]:
+        _require_declared_purpose(purpose, "DataService.fetch_security_master")
+        validate_security_master_request(symbols, start, end, max_records)
+        if (
+            provider.lower() != "databento"
+            or purpose != "characterization"
+            or arm_id != "classical_cross_sectional_ranker"
+            or final_portfolio_review
+        ):
+            raise LockboxViolationError("security-master source scope is not authorized")
+        for symbol in symbols:
+            self._guard_research_read(
+                provider,
+                symbol,
+                start,
+                end,
+                purpose=purpose,
+                arm_id=arm_id,
+                final_portfolio_review=False,
+                data_kind="security_master",
+            )
+        source = self._get_provider(provider)
+        if not isinstance(source, SecurityMasterProvider):
+            raise ValueError(f"Provider {provider} does not support security master")
+        return source.get_security_master(symbols, start, end, max_records=max_records)
+
+    def fetch_alpaca_source_page(
+        self,
+        request: AlpacaBarsRequest
+        | AlpacaCorporateActionsRequest
+        | AlpacaDailyFixtureRequest
+        | AlpacaCalendarRequest
+        | AlpacaMomentumCalendarRequest
+        | AlpacaMomentumDailyRequest
+        | AlpacaAnnouncementCalendarRequest
+        | AlpacaAnnouncementDailyRequest
+        | AlpacaEventBasisDailyRequest,
+        *,
+        page_token: str | None,
+        purpose: str | None,
+        arm_id: str | None,
+        final_portfolio_review: bool = False,
+        on_http_attempt: Callable[[], None] | None = None,
+    ) -> bytes:
+        _require_declared_purpose(purpose, "DataService.fetch_alpaca_source_page")
+        event_basis = isinstance(request, AlpacaEventBasisDailyRequest)
+        announcement = isinstance(request, (AlpacaAnnouncementCalendarRequest, AlpacaAnnouncementDailyRequest))
+        if isinstance(request, AlpacaEventBasisDailyRequest):
+            request = validate_event_basis_request(request)
+        if isinstance(request, (AlpacaAnnouncementCalendarRequest, AlpacaAnnouncementDailyRequest)):
+            request = validate_announcement_request(request)
+        momentum = isinstance(request, (AlpacaMomentumCalendarRequest, AlpacaMomentumDailyRequest))
+        if isinstance(request, AlpacaMomentumCalendarRequest):
+            request = AlpacaMomentumCalendarRequest.model_validate(request)
+        elif isinstance(request, AlpacaMomentumDailyRequest):
+            request = AlpacaMomentumDailyRequest.model_validate(request)
+        daily = isinstance(request, (AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest))
+        calendar = isinstance(request, (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest))
+        expected_ledger = (
+            CLASSICAL_RANKER_EVENT_BASIS_FIXTURE_LEDGER_V1
+            if event_basis
+            else CLASSICAL_RANKER_ANNOUNCEMENT_FIXTURE_LEDGER_V1
+            if announcement
+            else CLASSICAL_RANKER_MOMENTUM_FIXTURE_LEDGER_V1
+            if momentum
+            else CLASSICAL_RANKER_CALENDAR_REFERENCE_LEDGER_V1
+            if calendar
+            else CLASSICAL_RANKER_DAILY_FIXTURE_LEDGER_V1
+            if daily
+            else CLASSICAL_RANKER_ALPACA_LEDGER_V1
+        )
+        if (
+            self._lockbox_ledger != expected_ledger
+            or purpose != "characterization"
+            or arm_id != "classical_cross_sectional_ranker"
+            or final_portfolio_review
+            or not isinstance(
+                request,
+                (
+                    AlpacaBarsRequest,
+                    AlpacaCorporateActionsRequest,
+                    AlpacaDailyFixtureRequest,
+                    AlpacaCalendarRequest,
+                    AlpacaMomentumCalendarRequest,
+                    AlpacaMomentumDailyRequest,
+                    AlpacaAnnouncementCalendarRequest,
+                    AlpacaAnnouncementDailyRequest,
+                    AlpacaEventBasisDailyRequest,
+                ),
+            )
+            or ((daily or calendar) and page_token is not None)
+        ):
+            raise LockboxViolationError("Alpaca source request is outside its dedicated ledger")
+        if isinstance(request, (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest)):
+            symbols = ("US_MARKET",)
+            start = request.start
+            end = request.end
+            data_kind = (
+                "ranker_announcement_calendar_reference"
+                if announcement
+                else "ranker_momentum_calendar_reference"
+                if momentum
+                else "ranker_calendar_reference"
+            )
+        elif isinstance(
+            request,
+            (AlpacaBarsRequest, AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest),
+        ):
+            symbols = (request.symbol,)
+            start = request.start.date()
+            end = request.end.date()
+            data_kind = (
+                f"ranker_event_basis_{request.adjustment}_fixture"
+                if event_basis
+                else "ranker_announcement_daily_fixture"
+                if announcement
+                else "ranker_momentum_daily_fixture"
+                if momentum
+                else "ranker_daily_fixture"
+                if daily
+                else "ranker_bars"
+            )
+        else:
+            symbols = request.symbols
+            start = request.start
+            end = request.end
+            data_kind = "ranker_corporate_actions"
+        for symbol in symbols:
+            self._guard_research_read(
+                "alpaca",
+                symbol,
+                start,
+                end,
+                purpose=purpose,
+                arm_id=arm_id,
+                final_portfolio_review=False,
+                data_kind=data_kind,
+            )
+        source = self._get_provider("alpaca")
+        if not isinstance(source, AlpacaProvider):
+            raise ValueError("Alpaca provider source capability is not concrete")
+        if on_http_attempt is not None:
+            return source.fetch_source_page(
+                request, page_token=page_token, on_http_attempt=on_http_attempt
+            )
+        return source.fetch_source_page(request, page_token=page_token)
 
     def fetch_adjustment_factors(
         self,

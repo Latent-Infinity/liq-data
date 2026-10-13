@@ -25,7 +25,23 @@ from liq.data.exceptions import (
     RateLimitError,
     ValidationError,
 )
-from liq.data.providers.base import BaseProvider
+from liq.data.fx_fix_cohort_window import CohortSourceWindow
+from liq.data.oanda_instrument_metadata import InstrumentMetadataObservation
+from liq.data.oanda_source_capture_contract import SourcePriceWindow
+from liq.data.oanda_source_metadata import CandleDay, CandleDayObservation
+from liq.data.providers.base import PRICE_DTYPE, VOLUME_DTYPE, BaseProvider
+from liq.data.providers.oanda_account_probe import AccountCandleObservation, probe_account_candle
+from liq.data.providers.oanda_candles import PriceComponents, fetch_candle_chunk
+from liq.data.providers.oanda_price_capture import PriceCaptureFailure, capture_source_prices
+from liq.data.providers.oanda_source_body import SourceBody
+from liq.data.providers.oanda_source_transport import probe_instrument_metadata, probe_source_day
+
+
+class OandaProviderClosed(ProviderError):
+    """A terminal provider cannot allocate or expose a client."""
+
+    def __init__(self) -> None:
+        super().__init__("PROVIDER_CLOSED")
 
 
 class OandaProvider(BaseProvider):
@@ -109,9 +125,12 @@ class OandaProvider(BaseProvider):
 
         # Client created lazily
         self._client: httpx.Client | None = None
+        self._closed = False
 
     def _get_client(self) -> httpx.Client:
         """Get or create the HTTP client."""
+        if self._closed:
+            raise OandaProviderClosed()
         if self._client is None:
             self._client = httpx.Client(
                 headers={
@@ -155,39 +174,88 @@ class OandaProvider(BaseProvider):
             AuthenticationError: If API credentials are invalid
             RateLimitError: If rate limit is exceeded
         """
-        self.validate_timeframe(timeframe)
+        return self.bars_to_dataframe(self._fetch_candles(symbol, start, end, timeframe, "M"))
 
+    def fetch_bid_ask_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        timeframe: str = "1m",
+    ) -> pl.DataFrame:
+        """Fetch historical base-price bid/ask OHLC candles, not account-specific fills."""
+        columns = [
+            "timestamp",
+            "bid_open",
+            "bid_high",
+            "bid_low",
+            "bid_close",
+            "ask_open",
+            "ask_high",
+            "ask_low",
+            "ask_close",
+            "volume",
+        ]
+        rows = self._fetch_candles(symbol, start, end, timeframe, "BA")
+        schema = {"timestamp": pl.Datetime("us", "UTC")}
+        schema.update(dict.fromkeys(columns[1:-1], PRICE_DTYPE))
+        schema["volume"] = VOLUME_DTYPE
+        return pl.DataFrame(rows, schema=schema) if rows else pl.DataFrame(schema=schema)
+
+    def probe_account_candle(self) -> AccountCandleObservation:
+        """Return metadata from the separate, fixed account-candle compatibility route."""
+        return probe_account_candle(self._get_client(), self._base_url, self._account_id)
+
+    def probe_instrument_metadata(self) -> InstrumentMetadataObservation:
+        """Expose only selected current membership and native quote-unit metadata."""
+        return probe_instrument_metadata(self)
+
+    def probe_source_day(self, scope: CandleDay) -> CandleDayObservation:
+        """Expose only coverage metadata for a fixed account-scoped daily case."""
+        return probe_source_day(self, scope)
+
+    def capture_source_prices(self, scope: SourcePriceWindow) -> SourceBody | PriceCaptureFailure:
+        """Transport-only capability; research collectors must use the guarded service."""
+        return capture_source_prices(self, scope)
+
+    def capture_cohort_source_prices(
+        self, scope: CohortSourceWindow
+    ) -> SourceBody | PriceCaptureFailure:
+        """Expose the distinct fixed-cohort capability without granting research access."""
+        from liq.data.providers.oanda_cohort_prices import capture_cohort_source_prices
+
+        return capture_cohort_source_prices(self, scope)
+
+    def _fetch_candles(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        timeframe: str,
+        price_components: PriceComponents,
+    ) -> list[dict[str, Any]]:
+        """Paginate one historical price basis without repairing missing candles."""
+        self.validate_timeframe(timeframe)
         granularity = self.TIMEFRAME_MAP[timeframe]
         minutes_per_candle = self.TIMEFRAME_MINUTES[timeframe]
-
-        # Convert dates to datetimes
         start_dt = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
         end_dt = datetime.combine(end, datetime.max.time(), tzinfo=UTC)
-
-        # Calculate chunk size (5000 candles worth)
-        chunk_minutes = self.MAX_CANDLES_PER_REQUEST * minutes_per_candle
-        chunk_delta = timedelta(minutes=chunk_minutes)
-
+        chunk_delta = timedelta(minutes=self.MAX_CANDLES_PER_REQUEST * minutes_per_candle)
         all_bars: list[dict[str, Any]] = []
         current_start = start_dt
-
         try:
-            # Paginate through the date range
             while current_start < end_dt:
                 current_end = min(current_start + chunk_delta, end_dt)
-
-                chunk_bars = self._fetch_bars_chunk(symbol, current_start, current_end, granularity)
+                chunk_bars = self._fetch_bars_chunk(
+                    symbol, current_start, current_end, granularity, price_components
+                )
                 all_bars.extend(chunk_bars)
-
-                # Move to next chunk
                 if chunk_bars:
                     last_timestamp = chunk_bars[-1]["timestamp"]
                     current_start = last_timestamp + timedelta(minutes=minutes_per_candle)
                 else:
                     current_start = current_end
-
-            return self.bars_to_dataframe(all_bars)
-
+            return all_bars
         except (AuthenticationError, RateLimitError, ProviderError, ValidationError):
             raise
         except (httpx.RequestError, KeyError, ValueError, TypeError) as e:
@@ -199,64 +267,18 @@ class OandaProvider(BaseProvider):
         start_dt: datetime,
         end_dt: datetime,
         granularity: str,
+        price_components: PriceComponents = "M",
     ) -> list[dict[str, Any]]:
-        """Fetch a single chunk of OHLCV data (up to 5000 candles)."""
-        from_time = start_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        to_time = end_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-
-        url = (
-            f"{self._base_url}/v3/instruments/{symbol}/candles"
-            f"?from={from_time}&to={to_time}&granularity={granularity}"
-            f"&price=M"  # Request mid prices
+        """Fetch one chunk, preserving the requested price basis."""
+        return fetch_candle_chunk(
+            self._get_client(),
+            self._base_url,
+            symbol,
+            start_dt,
+            end_dt,
+            granularity,
+            price_components,
         )
-
-        response = self._get_client().get(url)
-
-        if response.status_code == 401:
-            raise AuthenticationError("Invalid OANDA API credentials")
-        if response.status_code == 429:
-            raise RateLimitError("OANDA API rate limit exceeded")
-        if response.status_code != 200:
-            raise ProviderError(f"OANDA API error: {response.status_code} - {response.text}")
-
-        data = response.json()
-        bars: list[dict[str, Any]] = []
-
-        for candle in data.get("candles", []):
-            # Skip incomplete candles
-            if not candle.get("complete", False):
-                continue
-
-            if "time" not in candle:
-                raise ValidationError("Missing timestamp in candle data")
-
-            # Parse timestamp (OANDA uses RFC3339 format)
-            timestamp_str = candle["time"]
-            timestamp = datetime.fromisoformat(
-                timestamp_str.replace("Z", "+00:00").split(".")[0] + "+00:00"
-            )
-
-            if "mid" not in candle:
-                raise ValidationError(f"Missing mid price data at {timestamp_str}")
-
-            mid = candle["mid"]
-            required = ["o", "h", "l", "c"]
-            for field in required:
-                if field not in mid:
-                    raise ValidationError(f"Missing OHLC field '{field}' at {timestamp_str}")
-
-            bars.append(
-                {
-                    "timestamp": timestamp,
-                    "open": float(mid["o"]),
-                    "high": float(mid["h"]),
-                    "low": float(mid["l"]),
-                    "close": float(mid["c"]),
-                    "volume": float(candle.get("volume", 0)),
-                }
-            )
-
-        return bars
 
     def list_instruments(self, asset_class: str | None = None) -> pl.DataFrame:
         """List available forex instruments from OANDA.
@@ -304,6 +326,9 @@ class OandaProvider(BaseProvider):
         except (httpx.RequestError, KeyError, ValueError) as e:
             raise ProviderError(f"Failed to fetch OANDA instruments: {e}") from e
 
+    def fetch_instruments(self, asset_class: str) -> list[Any]:
+        return self.list_instruments(asset_class).to_dicts()
+
     def validate_credentials(self) -> bool:
         """Validate OANDA API credentials.
 
@@ -317,7 +342,15 @@ class OandaProvider(BaseProvider):
         except httpx.RequestError:
             return False
 
-    def __del__(self) -> None:
-        """Clean up HTTP client."""
-        if hasattr(self, "_client") and self._client is not None:
+    def close(self) -> None:
+        """Make shutdown terminal before closing the owned client, without retries."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._client is not None:
             self._client.close()
+
+    def __del__(self) -> None:
+        """Close an initialized provider only if shutdown has not been attempted."""
+        if not getattr(self, "_closed", True):
+            self.close()

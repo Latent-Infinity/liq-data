@@ -5,6 +5,7 @@ import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypedDict
 from unittest.mock import MagicMock, patch
 
@@ -1049,8 +1050,7 @@ class TestDataServiceExtended:
     def test_declared_corporate_actions_fetch_routes_through_guard(self, tmp_path: Path) -> None:
         """Reference-data reads use the arm's frozen fold before provider access."""
         ds = DataService(data_root=tmp_path)
-        provider = MagicMock()
-        provider.get_corporate_actions.return_value = []
+        provider = SimpleNamespace(get_corporate_actions=MagicMock(return_value=[]))
 
         with (
             patch.object(ds, "_guard_research_read") as guard,

@@ -19,6 +19,9 @@ have no matching delta is the mismatch rate the caller gates on.
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -47,6 +50,43 @@ _TICKER = re.compile(r"^[A-Z][A-Z0-9.\-]{0,6}$")
 _WIKI_LINK = re.compile(r"\[\[(?:[^\]|]*\|)?([^\]|]*)\]\]")
 _REF = re.compile(r"<ref[^>]*/>|<ref[^>]*>.*?</ref>", re.DOTALL)
 _TEMPLATE = re.compile(r"\{\{[^{}]*\}\}", re.DOTALL)
+
+
+def parse_snapshot_reference(
+    raw: bytes,
+    *,
+    expected_git_blob: str,
+    expected_bytes: int,
+    observation_date: date,
+) -> list[str]:
+    """Return literal members from one exact-date, identity-verified snapshot.
+
+    This characterizes a source row, not point-in-time ticker admissibility.
+    No preceding snapshot, normalization or deduplication substitutes for it.
+    """
+    identity = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+    if len(raw) != expected_bytes or identity != expected_git_blob:
+        raise ValueError("snapshot source identity mismatch")
+    reader = csv.reader(io.StringIO(raw.decode("utf-8")), strict=True)
+    if next(reader, None) != ["date", "tickers"]:
+        raise ValueError("snapshot header mismatch")
+    selected: list[str] = []
+    for count, row in enumerate(reader, start=1):
+        if count > 20000 or len(row) != 2 or any(len(cell) > 65536 for cell in row):
+            raise ValueError("snapshot row/field budget or shape")
+        observed = date.fromisoformat(row[0])
+        if observed.isoformat() != row[0]:
+            raise ValueError("snapshot date must be canonical")
+        if observed == observation_date:
+            selected.append(row[1])
+    if len(selected) != 1:
+        raise ValueError("snapshot requires exactly one requested date")
+    members = selected[0].split(",")
+    if any(_TICKER.fullmatch(member) is None for member in members):
+        raise ValueError("snapshot ticker is malformed")
+    if len(set(members)) != len(members):
+        raise ValueError("snapshot duplicate ticker")
+    return members
 
 
 class SP500MembershipProvider:
@@ -89,6 +129,46 @@ class SP500MembershipProvider:
             pl.col("date").str.to_date("%Y-%m-%d"),
             pl.col("tickers").str.split(",").list.eval(pl.element().str.strip_chars()),
         ).sort("date")
+
+    def capture_snapshot_reference(self, revision: str) -> bytes:
+        """Capture the immutable membership CSV without admitting its history."""
+        return self._capture_reference(revision, SNAPSHOT_CSV_URL)
+
+    def capture_date_query_reference(self, revision: str) -> bytes:
+        """Capture the maintainer's date-query notebook as inert reference bytes."""
+        return self._capture_reference(
+            revision, "https://raw.githubusercontent.com/fja05680/sp500/master/sp500_by_date.ipynb"
+        )
+
+    def _capture_reference(self, revision: str, template: str) -> bytes:
+        """Capture one immutable reference object without admitting historical membership.
+
+        The caller must supervise the whole request with a 60-second deadline.
+        Reaching the 8 MiB ceiling refuses without reading another chunk.
+        """
+        if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise ValueError("snapshot revision must be a canonical Git object ID")
+        limit = 8 * 1024 * 1024
+        url = template.replace("/master/", f"/{revision}/")
+        with self._get_client().stream(
+            "GET",
+            url,
+            headers={"Accept-Encoding": "identity"},
+            follow_redirects=False,
+            timeout=min(self._timeout, 20.0),
+        ) as response:
+            response.raise_for_status()
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                raise ValueError("snapshot reference encoding must be identity")
+            declared = response.headers.get("content-length")
+            if declared is not None and not 0 <= int(declared) < limit:
+                raise ValueError("snapshot reference byte budget")
+            body = bytearray()
+            for chunk in response.iter_bytes(chunk_size=1024):
+                body.extend(chunk)
+                if len(body) >= limit:
+                    raise ValueError("snapshot reference byte budget")
+            return bytes(body)
 
     def fetch_wikipedia_changes(self) -> pl.DataFrame:
         """Long-form change entries parsed from the live changes table.

@@ -170,3 +170,11 @@ class SchemaValidationError(ValidationError):
     """Schema or field validation failed."""
 
     pass
+
+
+class StoredBarsRequiredError(DataError, ValueError):
+    """A batched request needs stored bars and cannot aggregate another timeframe."""
+
+
+class TimestampAuditLimitError(DataError):
+    """A timestamp audit exceeded its declared row budget and is incomplete."""

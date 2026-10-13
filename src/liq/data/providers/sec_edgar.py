@@ -25,7 +25,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Final, cast
 from urllib.parse import quote
 
 import httpx
@@ -35,6 +35,8 @@ from liq.data.exceptions import ConfigurationError, ProviderError, RateLimitErro
 from liq.data.rate_limiter import RateLimiter
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+_REFERENCE_BODY_LIMIT: Final = 4 * 1024 * 1024
+_REFERENCE_CHUNK_SIZE: Final = 1024
 COMPANY_BROWSE_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 SUBMISSIONS_ARCHIVE_URL = "https://data.sec.gov/submissions/{name}"
@@ -378,7 +380,10 @@ def parse_company_browse_atom(
 
 
 def _parse_acceptance(raw: str) -> datetime:
-    return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.utcoffset() is None:
+        raise ValueError("SEC acceptance timestamp requires an explicit timezone")
+    return parsed.astimezone(UTC)
 
 
 def _extract_2_02(doc: dict[str, Any]) -> list[dict[str, Any]]:
@@ -392,6 +397,108 @@ def _extract_2_02(doc: dict[str, Any]) -> list[dict[str, Any]]:
         }
         for row in _extract_8k(doc, {"2.02"})
     ]
+
+
+def parse_submissions_reference(
+    payload: object, *, cik: str, start: datetime, end_exclusive: datetime
+) -> dict[str, Any]:
+    """Validate one root object and select a disclosure candidate, without I/O.
+
+    Selection is within this object's explicit acceptance-time window. Neither
+    an empty result nor advertised archive filing dates establishes completeness.
+    """
+    if start.utcoffset() is None or end_exclusive.utcoffset() is None or start >= end_exclusive:
+        raise ValueError("reference window requires increasing aware endpoints")
+    if re.fullmatch(r"[0-9]{10}", cik) is None or int(cik) == 0:
+        raise ValueError("reference issuer requires a canonical CIK")
+    if not isinstance(payload, dict):
+        raise ValueError("submissions root must be an object")
+    payload = cast(dict[str, Any], payload)
+    source_cik = payload.get("cik")
+    if type(source_cik) not in (str, int) or str(source_cik).zfill(10) != cik:
+        raise ValueError("submissions issuer identity mismatch")
+    name = payload.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("submissions issuer name missing")
+    filings = payload.get("filings")
+    if not isinstance(filings, dict) or not isinstance(filings.get("recent"), dict):
+        raise ValueError("submissions parallel arrays missing")
+    recent = filings["recent"]
+    fields = (
+        "form",
+        "accessionNumber",
+        "acceptanceDateTime",
+        "filingDate",
+        "items",
+        "primaryDocument",
+    )
+    if any(not isinstance(recent.get(field), list) for field in fields):
+        raise ValueError("submissions required parallel arrays missing")
+    count = len(recent["form"])
+    if count > 20000 or any(len(recent[field]) != count for field in fields):
+        raise ValueError("submissions parallel array lengths or row budget")
+    if any(not isinstance(value, str) for field in fields for value in recent[field]):
+        raise ValueError("submissions parallel array value type")
+    archives = filings.get("files")
+    if not isinstance(archives, list) or len(archives) > 1000:
+        raise ValueError("submissions archive descriptor budget or shape")
+    archive_names: set[str] = set()
+    for archive in archives:
+        if not isinstance(archive, dict):
+            raise ValueError("submissions archive descriptor shape")
+        filename = archive.get("name")
+        if (
+            not isinstance(filename, str)
+            or re.fullmatch(rf"CIK{cik}-submissions-[0-9]{{3}}\.json", filename) is None
+            or filename in archive_names
+        ):
+            raise ValueError("submissions archive identity ambiguous or unsafe")
+        archive_names.add(filename)
+        if type(archive.get("filingCount")) is not int or archive["filingCount"] < 0:
+            raise ValueError("submissions archive filing count")
+        lower, upper = archive.get("filingFrom"), archive.get("filingTo")
+        if (
+            not isinstance(lower, str)
+            or not isinstance(upper, str)
+            or date.fromisoformat(lower) > date.fromisoformat(upper)
+        ):
+            raise ValueError("submissions archive filing-date bounds")
+    originals: list[tuple[datetime, str, dict[str, str]]] = []
+    amendments: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index in range(count):
+        row = {field: recent[field][index] for field in fields}
+        accession = row["accessionNumber"]
+        if _ACCESSION_PATTERN.fullmatch(accession) is None or accession in seen:
+            raise ValueError("submissions accession invalid or duplicated")
+        seen.add(accession)
+        accepted = _parse_acceptance(row["acceptanceDateTime"])
+        date.fromisoformat(row["filingDate"])
+        if row["form"] not in {"8-K", "8-K/A"}:
+            continue
+        items = {item.strip() for item in row["items"].split(",") if item.strip()}
+        if any(re.fullmatch(r"[0-9]+\.[0-9]{2}", item) is None for item in items):
+            raise ValueError("submissions item tokens malformed")
+        if "2.02" not in items or not start <= accepted < end_exclusive:
+            continue
+        document_url = sec_archive_document_url(cik, accession, row["primaryDocument"])
+        record = {**row, "acceptance_utc": accepted.isoformat(), "document_url": document_url}
+        if row["form"] == "8-K":
+            originals.append((accepted, accession, record))
+        else:
+            amendments.append(record)
+    originals.sort(key=lambda item: (item[0], item[1]))
+    return {
+        "cik": cik,
+        "issuer_name": name,
+        "recent_rows": count,
+        "selected_candidate": originals[0][2] if originals else None,
+        "qualifying_originals": [record for _, _, record in originals],
+        "amendments_in_window": amendments,
+        "archive_descriptors": [dict(archive) for archive in archives],
+        "historical_completeness_established": False,
+        "event_meaning": "SEC disclosure at explicit acceptance time, not earliest earnings release",
+    }
 
 
 def _parallel_value(doc: dict[str, Any], field: str, index: int) -> Any:
@@ -509,6 +616,91 @@ class SECEdgarProvider:
         return self._get_response(url).json()
 
     # -- reference lookups ---------------------------------------------------
+    def capture_ticker_reference(self) -> bytes:
+        """Capture the bounded current ticker reference, without retries."""
+        return self._capture_reference_url(TICKERS_URL)
+
+    def capture_submissions_index(self, cik: str) -> bytes:
+        """Capture one root submissions object, never following archive entries."""
+        if re.fullmatch(r"[0-9]{10}", cik) is None or int(cik) == 0:
+            raise ValueError("submissions capture requires a canonical ten-digit CIK")
+        return self._capture_reference_url(SUBMISSIONS_URL.format(cik10=cik))
+
+    def capture_submissions_archive(self, cik: str, filename: str) -> bytes:
+        """Capture one canonical issuer archive, without retries or traversal.
+
+        The caller must separately bind the filename to its root advertisement.
+        """
+        if re.fullmatch(r"[0-9]{10}", cik) is None or int(cik) == 0:
+            raise ValueError("archive capture requires canonical ten-digit CIK")
+        if re.fullmatch(rf"CIK{cik}-submissions-[0-9]{{3}}\.json", filename) is None:
+            raise ValueError("archive capture requires issuer-bound canonical filename")
+        return self._capture_reference_url(SUBMISSIONS_ARCHIVE_URL.format(name=filename))
+
+    def capture_filing_document(
+        self,
+        cik: str,
+        accession_number: str,
+        filename: str,
+        *,
+        max_source_bytes: int = _REFERENCE_BODY_LIMIT,
+    ) -> bytes:
+        """Capture one document with an optional smaller whole-KiB body ceiling.
+
+        The default remains 4 MiB; links are never followed and the byte ceiling
+        cannot be enlarged. An external supervisor bounds the whole request.
+        """
+        return self._capture_reference_url(
+            sec_archive_document_url(cik, accession_number, filename),
+            max_source_bytes=max_source_bytes,
+        )
+
+    def _capture_reference_url(
+        self, url: str, *, max_source_bytes: int = _REFERENCE_BODY_LIMIT
+    ) -> bytes:
+        """Capture one bounded reference object, without retries.
+
+        Requires an external 60-second supervisor for a whole-request deadline.
+        At most 4 MiB of identity-encoded body is consumed; reaching the ceiling
+        refuses rather than probing for more bytes. This does not admit history.
+        """
+        if (
+            type(max_source_bytes) is not int
+            or not _REFERENCE_CHUNK_SIZE <= max_source_bytes <= _REFERENCE_BODY_LIMIT
+            or max_source_bytes % _REFERENCE_CHUNK_SIZE
+        ):
+            raise ValueError("source byte budget must be whole 1 KiB chunks within 4 MiB")
+        limit = max_source_bytes
+        self.rate_limiter.acquire()
+        try:
+            with self._get_client().stream(
+                "GET",
+                url,
+                headers={"Accept-Encoding": "identity"},
+                follow_redirects=False,
+                timeout=min(self._timeout, 20.0),
+            ) as response:
+                if response.status_code != 200:
+                    raise ProviderError(f"SEC reference capture HTTP {response.status_code}")
+                if response.headers.get("content-encoding", "identity").lower() != "identity":
+                    raise ProviderError("SEC reference capture unexpected encoding")
+                declared = response.headers.get("content-length")
+                if declared is not None:
+                    try:
+                        size = int(declared)
+                    except ValueError as exc:
+                        raise ProviderError("SEC reference capture malformed length") from exc
+                    if size < 0 or size >= limit:
+                        raise ProviderError("SEC reference capture byte budget")
+                body = bytearray()
+                for chunk in response.iter_bytes(chunk_size=_REFERENCE_CHUNK_SIZE):
+                    body.extend(chunk)
+                    if len(body) >= limit:
+                        raise ProviderError("SEC reference capture byte budget")
+                return bytes(body)
+        except httpx.HTTPError as exc:
+            raise ProviderError("SEC reference capture transport refusal") from exc
+
     def _ticker_reference_entries(self) -> tuple[EdgarTickerCandidate, ...]:
         if self._ticker_entries is None:
             payload = self._get_json(TICKERS_URL)

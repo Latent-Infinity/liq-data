@@ -1568,7 +1568,9 @@ class DataService:
     ) -> bytes:
         _require_declared_purpose(purpose, "DataService.fetch_alpaca_source_page")
         event_basis = isinstance(request, AlpacaEventBasisDailyRequest)
-        announcement = isinstance(request, (AlpacaAnnouncementCalendarRequest, AlpacaAnnouncementDailyRequest))
+        announcement = isinstance(
+            request, (AlpacaAnnouncementCalendarRequest, AlpacaAnnouncementDailyRequest)
+        )
         if isinstance(request, AlpacaEventBasisDailyRequest):
             request = validate_event_basis_request(request)
         if isinstance(request, (AlpacaAnnouncementCalendarRequest, AlpacaAnnouncementDailyRequest)):
@@ -1578,8 +1580,23 @@ class DataService:
             request = AlpacaMomentumCalendarRequest.model_validate(request)
         elif isinstance(request, AlpacaMomentumDailyRequest):
             request = AlpacaMomentumDailyRequest.model_validate(request)
-        daily = isinstance(request, (AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest))
-        calendar = isinstance(request, (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest))
+        daily = isinstance(
+            request,
+            (
+                AlpacaDailyFixtureRequest,
+                AlpacaMomentumDailyRequest,
+                AlpacaAnnouncementDailyRequest,
+                AlpacaEventBasisDailyRequest,
+            ),
+        )
+        calendar = isinstance(
+            request,
+            (
+                AlpacaCalendarRequest,
+                AlpacaMomentumCalendarRequest,
+                AlpacaAnnouncementCalendarRequest,
+            ),
+        )
         expected_ledger = (
             CLASSICAL_RANKER_EVENT_BASIS_FIXTURE_LEDGER_V1
             if event_basis
@@ -1615,7 +1632,14 @@ class DataService:
             or ((daily or calendar) and page_token is not None)
         ):
             raise LockboxViolationError("Alpaca source request is outside its dedicated ledger")
-        if isinstance(request, (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest)):
+        if isinstance(
+            request,
+            (
+                AlpacaCalendarRequest,
+                AlpacaMomentumCalendarRequest,
+                AlpacaAnnouncementCalendarRequest,
+            ),
+        ):
             symbols = ("US_MARKET",)
             start = request.start
             end = request.end
@@ -1628,7 +1652,13 @@ class DataService:
             )
         elif isinstance(
             request,
-            (AlpacaBarsRequest, AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest),
+            (
+                AlpacaBarsRequest,
+                AlpacaDailyFixtureRequest,
+                AlpacaMomentumDailyRequest,
+                AlpacaAnnouncementDailyRequest,
+                AlpacaEventBasisDailyRequest,
+            ),
         ):
             symbols = (request.symbol,)
             start = request.start.date()

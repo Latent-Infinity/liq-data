@@ -375,7 +375,11 @@ class AlpacaProvider(BaseProvider):
             request = AlpacaMomentumDailyRequest.model_validate(request)
         if isinstance(
             request,
-            (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest),
+            (
+                AlpacaCalendarRequest,
+                AlpacaMomentumCalendarRequest,
+                AlpacaAnnouncementCalendarRequest,
+            ),
         ):
             url = "https://paper-api.alpaca.markets/v2/calendar"
             params = {
@@ -398,7 +402,13 @@ class AlpacaProvider(BaseProvider):
             max_bytes = request.max_response_bytes
         elif isinstance(
             request,
-            (AlpacaBarsRequest, AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest),
+            (
+                AlpacaBarsRequest,
+                AlpacaDailyFixtureRequest,
+                AlpacaMomentumDailyRequest,
+                AlpacaAnnouncementDailyRequest,
+                AlpacaEventBasisDailyRequest,
+            ),
         ):
             url = f"{self.DATA_BASE_URL}/v2/stocks/bars"
             params = {
@@ -417,9 +427,24 @@ class AlpacaProvider(BaseProvider):
         else:
             raise TypeError("unsupported Alpaca source request")
         if page_token is not None:
-            if isinstance(request, (AlpacaCalendarRequest, AlpacaMomentumCalendarRequest, AlpacaAnnouncementCalendarRequest)):
+            if isinstance(
+                request,
+                (
+                    AlpacaCalendarRequest,
+                    AlpacaMomentumCalendarRequest,
+                    AlpacaAnnouncementCalendarRequest,
+                ),
+            ):
                 raise AlpacaCaptureRefused("calendar_continuation_forbidden")
-            if isinstance(request, (AlpacaDailyFixtureRequest, AlpacaMomentumDailyRequest, AlpacaAnnouncementDailyRequest, AlpacaEventBasisDailyRequest)):
+            if isinstance(
+                request,
+                (
+                    AlpacaDailyFixtureRequest,
+                    AlpacaMomentumDailyRequest,
+                    AlpacaAnnouncementDailyRequest,
+                    AlpacaEventBasisDailyRequest,
+                ),
+            ):
                 raise AlpacaCaptureRefused("daily_fixture_continuation_forbidden")
             if not isinstance(page_token, str) or not page_token or len(page_token) > 4096:
                 raise AlpacaCaptureRefused("invalid_page_token")

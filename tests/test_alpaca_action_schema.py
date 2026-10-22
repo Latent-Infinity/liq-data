@@ -117,10 +117,12 @@ def test_provider_refuses_forged_scope_before_http():
 
 def test_guard_refuses_subclass_without_calling_its_methods(tmp_path):
     calls = []
+
     class Subclass(AlpacaActionSchemaRequest):
         def model_dump(self, **kwargs):
             calls.append(1)
             return super().model_dump(**kwargs)
+
     with pytest.raises(AlpacaCaptureRefused, match="request_type"):
         guard_action_schema(Subclass(), tmp_path / "usage.jsonl")
     assert calls == []

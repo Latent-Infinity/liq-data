@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError
 
 from liq.data.alpaca_source import AlpacaDailyFixtureRequest
 
-JsonValue: TypeAlias = str | Decimal | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+JsonValue: TypeAlias = (
+    str | Decimal | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+)
 
 
 class DailyFixtureRefused(ValueError):

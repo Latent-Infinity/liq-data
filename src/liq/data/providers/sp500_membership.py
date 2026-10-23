@@ -140,6 +140,27 @@ class SP500MembershipProvider:
             revision, "https://raw.githubusercontent.com/fja05680/sp500/master/sp500_by_date.ipynb"
         )
 
+    def capture_wikipedia_revision_reference(self, cutoff: datetime) -> bytes:
+        """Return raw metadata; caller retains it before parsing and supervises the deadline."""
+        if cutoff.tzinfo is None or cutoff.utcoffset() != timedelta(0) or cutoff.microsecond:
+            raise ConfigurationError("Wikipedia revision cutoff must be whole-second UTC")
+        return self._capture_bounded_reference(
+            WIKIPEDIA_API_URL,
+            limit=64 * 1024,
+            params={
+                "action": "query",
+                "prop": "revisions",
+                "titles": _WIKIPEDIA_CONSTITUENTS_PAGE,
+                "rvlimit": "1",
+                "rvstart": cutoff.isoformat(timespec="seconds").replace("+00:00", "Z"),
+                "rvdir": "older",
+                "rvprop": "ids|timestamp|size|sha1",
+                "format": "json",
+                "formatversion": "2",
+                "maxlag": "1",
+            },
+        )
+
     def _capture_reference(self, revision: str, template: str) -> bytes:
         """Capture one immutable reference object without admitting historical membership.
 
@@ -150,9 +171,15 @@ class SP500MembershipProvider:
             raise ValueError("snapshot revision must be a canonical Git object ID")
         limit = 8 * 1024 * 1024
         url = template.replace("/master/", f"/{revision}/")
+        return self._capture_bounded_reference(url, limit=limit)
+
+    def _capture_bounded_reference(
+        self, url: str, *, limit: int, params: dict[str, str] | None = None
+    ) -> bytes:
         with self._get_client().stream(
             "GET",
             url,
+            params=params,
             headers={"Accept-Encoding": "identity"},
             follow_redirects=False,
             timeout=min(self._timeout, 20.0),

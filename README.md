@@ -203,6 +203,19 @@ as full-composition `date` / `tickers` snapshots and fails closed if the file or
 schema is invalid. The current-membership-only, non-PIT source is available only
 through an explicit `source: stub` declaration; it is never an implicit fallback.
 
+`SP500MembershipProvider.capture_wikipedia_revision_reference(cutoff)` requests
+one page's revision metadata at or before a whole-second UTC cutoff. It returns
+unparsed bytes below a 64 KiB ceiling, without redirects, retries, article content
+or continuation requests. The authorized caller must retain those bytes before
+parsing and supervise the whole-attempt deadline. A revision locator does not
+establish historical index membership or security identity.
+
+`liq.data.wikipedia_revision.parse_revision_metadata(raw, cutoff=...)` validates
+an already retained metadata response and returns a scalar revision locator.
+It refuses duplicate JSON keys, ambiguous page identity, suppression, extra
+fields and clocks after the cutoff. The provider-declared SHA-1 is preserved
+without claiming content verification; continuation is reported but never followed.
+
 ### SEC 8-K event metadata
 
 `SECEdgarProvider.fetch_8k_events` returns exact-token matches for registered

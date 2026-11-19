@@ -15,7 +15,7 @@ Features:
 
 import asyncio
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -64,6 +64,41 @@ class _AttemptTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self.delegate.aclose()
+
+
+#: Alpaca quote fields and the column each becomes.
+_QUOTE_FIELDS = {
+    "t": "timestamp",
+    "bp": "bid",
+    "ap": "ask",
+    "bs": "bid_size",
+    "as": "ask_size",
+    "bx": "bid_exchange",
+    "ax": "ask_exchange",
+    "c": "conditions",
+    "z": "tape",
+}
+
+_QUOTE_SCHEMA: dict[str, Any] = {
+    "timestamp": pl.Datetime("ns", "UTC"),
+    "bid": pl.Float64,
+    "ask": pl.Float64,
+    "bid_size": pl.Int64,
+    "ask_size": pl.Int64,
+    "bid_exchange": pl.String,
+    "ask_exchange": pl.String,
+    "conditions": pl.List(pl.String),
+    "tape": pl.String,
+}
+
+
+def _rfc3339(bound: date, day_suffix: str) -> str:
+    """An exact instant for a `datetime`, or the given end of day for a bare `date`."""
+    if isinstance(bound, datetime):
+        if bound.tzinfo is None:
+            raise ValueError(f"window bound {bound} must be timezone-aware")
+        return bound.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return f"{bound.isoformat()}{day_suffix}"
 
 
 class AlpacaProvider(BaseProvider):
@@ -212,14 +247,22 @@ class AlpacaProvider(BaseProvider):
         start: date,
         end: date,
         timeframe: str = "1d",
+        *,
+        feed: str | None = None,
+        adjustment: str = "all",
     ) -> pl.DataFrame:
         """Fetch OHLCV bar data from Alpaca with automatic pagination.
 
+        A `datetime` bound is used exactly; a bare `date` spans its whole UTC day.
+
         Args:
             symbol: Stock ticker (e.g., "AAPL")
-            start: Start date (inclusive)
-            end: End date (inclusive)
+            start: Start bound (inclusive)
+            end: End bound (inclusive)
             timeframe: Bar timeframe (default: "1d")
+            feed: Alpaca feed ("sip" or "iex"); omitted means Alpaca's default
+            adjustment: corporate-action adjustment ("all" back-adjusts for splits
+                and dividends; "raw" returns prices as they traded)
 
         Returns:
             DataFrame with columns: timestamp, open, high, low, close, volume
@@ -235,9 +278,8 @@ class AlpacaProvider(BaseProvider):
 
         all_bars: list[dict[str, Any]] = []
 
-        # Format dates as RFC3339
-        start_str = f"{start.isoformat()}T00:00:00Z"
-        end_str = f"{end.isoformat()}T23:59:59Z"
+        start_str = _rfc3339(start, "T00:00:00Z")
+        end_str = _rfc3339(end, "T23:59:59Z")
 
         # Build URL
         url = f"{self.DATA_BASE_URL}/v2/stocks/{api_symbol}/bars"
@@ -247,8 +289,10 @@ class AlpacaProvider(BaseProvider):
             "end": end_str,
             "timeframe": alpaca_timeframe,
             "limit": 10000,  # Alpaca max per request
-            "adjustment": "all",  # Include all corporate action adjustments
+            "adjustment": adjustment,
         }
+        if feed is not None:
+            params["feed"] = feed
 
         # Fetch data with pagination
         page_token: str | None = None
@@ -285,6 +329,67 @@ class AlpacaProvider(BaseProvider):
                 break
 
         return self.bars_to_dataframe(all_bars)
+
+    def fetch_quotes(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        *,
+        feed: str | None = None,
+    ) -> pl.DataFrame:
+        """Fetch historical quotes with automatic pagination.
+
+        A `datetime` bound is used exactly; a bare `date` spans its whole UTC day,
+        as `fetch_bars` does. A liquid name prints millions of quotes a day, so a
+        caller wanting minutes should pass datetimes. Alpaca's fields are renamed
+        and their values left untouched; timestamps keep nanosecond precision.
+
+        Args:
+            symbol: Stock ticker (e.g., "AAPL")
+            start: Start bound (inclusive)
+            end: End bound (inclusive)
+            feed: Alpaca feed ("sip" or "iex"); omitted means Alpaca's default
+
+        Raises:
+            ValueError: A `datetime` bound is not timezone-aware.
+            AuthenticationError: The account is not entitled to the feed.
+        """
+        url = f"{self.DATA_BASE_URL}/v2/stocks/{self._normalize_symbol(symbol)}/quotes"
+        params: dict[str, Any] = {
+            "start": _rfc3339(start, "T00:00:00Z"),
+            "end": _rfc3339(end, "T23:59:59.999999999Z"),
+            "limit": 10000,
+            "sort": "asc",
+        }
+        if feed is not None:
+            params["feed"] = feed
+
+        records: list[dict[str, Any]] = []
+        seen_tokens: set[str] = set()
+        while True:
+            data = self._make_request("GET", url, params)
+            records.extend(data.get("quotes") or [])
+            page_token = data.get("next_page_token")
+            if not page_token:
+                break
+            if page_token in seen_tokens:
+                raise ProviderError("Alpaca quotes returned a repeated page token")
+            seen_tokens.add(page_token)
+            params["page_token"] = page_token
+
+        if not records:
+            return pl.DataFrame(schema=_QUOTE_SCHEMA)
+        return (
+            pl.DataFrame(records)
+            .rename(_QUOTE_FIELDS)
+            .with_columns(
+                pl.col("timestamp").str.to_datetime(
+                    "%Y-%m-%dT%H:%M:%S%.fZ", time_unit="ns", time_zone="UTC"
+                )
+            )
+            .select(list(_QUOTE_SCHEMA))
+        )
 
     def get_corporate_actions(
         self,

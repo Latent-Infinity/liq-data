@@ -1,0 +1,16 @@
+{
+  "purpose": "SOFTWARE_REGRESSION_ONLY",
+  "scientific_admission": false,
+  "provider": "alpaca",
+  "instrument": "AAPL",
+  "feed": "iex",
+  "endpoint": "/v2/stocks/AAPL/quotes",
+  "window_start_utc": "2022-06-15T18:05:00+00:00",
+  "window_end_utc": "2022-06-15T18:20:00+00:00",
+  "rows": 883,
+  "file": "quotes.parquet",
+  "sha256": "16be5a9c5c2b364b86ca1075f3492ecffde86c13c5ffec0e65d1487b5dbbaac9",
+  "source": "liq-alert/tests/fixtures/approved/alpaca_iex/aapl_iex_quotes.parquet",
+  "representation": "Byte-identical copy of approved real quotes, already normalized by AlpacaProvider; not original API response bytes.",
+  "test_projection": "First two actual rows; field names mapped back to documented API names and timestamps formatted at original nanosecond precision. No financial value or timestamp changed."
+}

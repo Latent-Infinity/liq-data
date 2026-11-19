@@ -1,6 +1,8 @@
 """Tests for liq.data.providers.alpaca module."""
 
-from datetime import date
+import hashlib
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -14,6 +16,7 @@ from liq.data.exceptions import (
     RateLimitError,
 )
 from liq.data.providers.alpaca import AlpacaProvider
+from liq.store import ParquetStore
 
 
 @pytest.fixture
@@ -57,7 +60,7 @@ def mock_bars_response() -> dict[str, Any]:
 
 
 @pytest.fixture
-def mock_assets_response() -> dict[str, Any]:
+def mock_assets_response() -> list[dict[str, Any]]:
     """Sample Alpaca assets response."""
     return [
         {
@@ -401,6 +404,62 @@ class TestAlpacaProviderFetchBars:
         assert "/AAPL/" in str(route.calls[0].request.url)
 
 
+class TestAlpacaProviderFetchBarsWindow:
+    """Exact datetime bounds and an explicit feed, as `fetch_quotes` takes them."""
+
+    URL = "https://data.alpaca.markets/v2/stocks/AAPL/bars"
+
+    @respx.mock
+    def test_a_datetime_window_and_feed_are_sent_exactly(
+        self, alpaca_provider: AlpacaProvider
+    ) -> None:
+        route = respx.get(self.URL).mock(
+            return_value=httpx.Response(200, json={"bars": [], "next_page_token": None})
+        )
+
+        alpaca_provider.fetch_bars(
+            "AAPL",
+            datetime(2022, 6, 15, 17, 30, tzinfo=UTC),
+            datetime(2022, 6, 15, 18, 20, tzinfo=UTC),
+            timeframe="1m",
+            feed="iex",
+        )
+
+        params = route.calls[0].request.url.params
+        assert params["start"] == "2022-06-15T17:30:00Z"
+        assert params["end"] == "2022-06-15T18:20:00Z"
+        assert params["feed"] == "iex"
+        assert params["adjustment"] == "all"
+
+    @respx.mock
+    def test_prices_as_traded_can_be_asked_for(self, alpaca_provider: AlpacaProvider) -> None:
+        route = respx.get(self.URL).mock(
+            return_value=httpx.Response(200, json={"bars": [], "next_page_token": None})
+        )
+
+        alpaca_provider.fetch_bars("AAPL", date(2022, 6, 15), date(2022, 6, 15), adjustment="raw")
+
+        assert route.calls[0].request.url.params["adjustment"] == "raw"
+
+    @respx.mock
+    def test_feed_is_omitted_unless_asked_for(self, alpaca_provider: AlpacaProvider) -> None:
+        route = respx.get(self.URL).mock(
+            return_value=httpx.Response(200, json={"bars": [], "next_page_token": None})
+        )
+
+        alpaca_provider.fetch_bars("AAPL", date(2022, 6, 15), date(2022, 6, 15))
+
+        params = route.calls[0].request.url.params
+        assert params["start"] == "2022-06-15T00:00:00Z"
+        assert "feed" not in params
+
+    def test_a_naive_bound_is_refused(self, alpaca_provider: AlpacaProvider) -> None:
+        with pytest.raises(ValueError, match="timezone-aware"):
+            alpaca_provider.fetch_bars(
+                "AAPL", datetime(2022, 6, 15, 17, 30), date(2022, 6, 15), timeframe="1m"
+            )
+
+
 class TestAlpacaProviderCorporateActions:
     """Tests for the v1 corporate-actions market-data endpoint."""
 
@@ -613,3 +672,133 @@ class TestAlpacaProviderTimeframeMapping:
         }
         for our_tf, alpaca_tf in expected_mappings.items():
             assert alpaca_provider.TIMEFRAME_MAP[our_tf] == alpaca_tf
+
+
+@pytest.fixture
+def approved_quotes() -> pl.DataFrame:
+    root = Path(__file__).parent / "fixtures" / "approved"
+    content = (root / "alpaca_quotes" / "quotes.parquet").read_bytes()
+    assert hashlib.sha256(content).hexdigest() == (
+        "16be5a9c5c2b364b86ca1075f3492ecffde86c13c5ffec0e65d1487b5dbbaac9"
+    )
+    return ParquetStore(str(root)).read("alpaca_quotes").head(2)
+
+
+def _quote_payload(frame: pl.DataFrame) -> list[dict[str, Any]]:
+    return (
+        frame.with_columns(pl.col("timestamp").dt.to_string("%Y-%m-%dT%H:%M:%S%.9fZ"))
+        .rename(
+            {
+                "timestamp": "t",
+                "bid": "bp",
+                "ask": "ap",
+                "bid_size": "bs",
+                "ask_size": "as",
+                "bid_exchange": "bx",
+                "ask_exchange": "ax",
+                "conditions": "c",
+                "tape": "z",
+            }
+        )
+        .to_dicts()
+    )
+
+
+class TestAlpacaProviderFetchQuotes:
+    URL = "https://data.alpaca.markets/v2/stocks/AAPL/quotes"
+    START = datetime(2022, 6, 15, 18, 5, tzinfo=UTC)
+    END = datetime(2022, 6, 15, 18, 20, tzinfo=UTC)
+
+    @respx.mock
+    def test_requests_the_exact_window_feed_and_ascending_order(
+        self, alpaca_provider: AlpacaProvider
+    ) -> None:
+        route = respx.get(self.URL).mock(
+            return_value=httpx.Response(200, json={"quotes": [], "next_page_token": None})
+        )
+
+        alpaca_provider.fetch_quotes("aapl", self.START, self.END, feed="sip")
+
+        params = route.calls[0].request.url.params
+        assert params["start"] == "2022-06-15T18:05:00Z"
+        assert params["end"] == "2022-06-15T18:20:00Z"
+        assert params["feed"] == "sip"
+        assert params["sort"] == "asc"
+        assert route.calls[0].request.headers["APCA-API-KEY-ID"] == "test_api_key"
+
+    @respx.mock
+    def test_a_date_bound_spans_the_whole_utc_day_and_feed_is_optional(
+        self, alpaca_provider: AlpacaProvider
+    ) -> None:
+        route = respx.get(self.URL).mock(
+            return_value=httpx.Response(200, json={"quotes": [], "next_page_token": None})
+        )
+
+        alpaca_provider.fetch_quotes("AAPL", date(2022, 6, 15), date(2022, 6, 15))
+
+        params = route.calls[0].request.url.params
+        assert params["start"] == "2022-06-15T00:00:00Z"
+        assert params["end"] == "2022-06-15T23:59:59.999999999Z"
+        assert "feed" not in params
+
+    @respx.mock
+    def test_fields_are_renamed_and_values_kept(
+        self, alpaca_provider: AlpacaProvider, approved_quotes: pl.DataFrame
+    ) -> None:
+        respx.get(self.URL).mock(
+            return_value=httpx.Response(
+                200, json={"quotes": _quote_payload(approved_quotes), "next_page_token": None}
+            )
+        )
+
+        frame = alpaca_provider.fetch_quotes("AAPL", self.START, self.END)
+
+        assert frame.equals(approved_quotes)
+
+    @respx.mock
+    def test_every_page_is_kept_in_order(
+        self, alpaca_provider: AlpacaProvider, approved_quotes: pl.DataFrame
+    ) -> None:
+        first, second = _quote_payload(approved_quotes)
+        route = respx.get(self.URL)
+        route.side_effect = [
+            httpx.Response(200, json={"quotes": [first], "next_page_token": "next"}),
+            httpx.Response(200, json={"quotes": [second], "next_page_token": None}),
+        ]
+
+        frame = alpaca_provider.fetch_quotes("AAPL", self.START, self.END)
+
+        assert frame.equals(approved_quotes)
+        assert route.calls[1].request.url.params["page_token"] == "next"
+
+    @respx.mock
+    def test_a_repeated_page_token_is_refused(self, alpaca_provider: AlpacaProvider) -> None:
+        route = respx.get(self.URL)
+        route.side_effect = [
+            httpx.Response(200, json={"quotes": [], "next_page_token": "repeated"}),
+            httpx.Response(200, json={"quotes": [], "next_page_token": "repeated"}),
+            httpx.Response(200, json={"quotes": [], "next_page_token": None}),
+        ]
+
+        with pytest.raises(ProviderError, match="repeated page token"):
+            alpaca_provider.fetch_quotes("AAPL", self.START, self.END)
+
+        assert len(route.calls) == 2
+
+    @respx.mock
+    def test_a_window_without_quotes_is_empty_with_the_same_columns(
+        self, alpaca_provider: AlpacaProvider
+    ) -> None:
+        respx.get(self.URL).mock(
+            return_value=httpx.Response(200, json={"quotes": None, "next_page_token": None})
+        )
+
+        frame = alpaca_provider.fetch_quotes("AAPL", self.START, self.END)
+
+        assert frame.is_empty()
+        assert "bid" in frame.columns
+        assert "timestamp" in frame.columns
+
+    def test_a_naive_bound_is_refused(self, alpaca_provider: AlpacaProvider) -> None:
+        with pytest.raises(ValueError, match="timezone-aware"):
+            alpaca_provider.fetch_quotes("AAPL", self.START.replace(tzinfo=None), self.END)
